@@ -17,12 +17,9 @@ In a Claude Code session:
 ```
 
 In the terminal, clicks need Claude Code's fullscreen renderer. `/tui fullscreen` switches to it,
-restarting and resuming your session. Without it, Claude Code prints replies to the terminal's main
-screen, where they cannot change, so every stretch shows open. As of Claude Code 2.1.300, some
-setups start on the main screen even with fullscreen set: `tmux -CC`, SSH from Windows, or a machine
-where a fullscreen start crashed. Start Claude Code with `CLAUDE_CODE_NO_FLICKER=1` to force
-fullscreen there. In the Claude desktop
-app stretches are links: click one to open it in place, click `«` to close it. No setting needed.
+restarting and resuming your session. If stretches still show open, see [Limits](#limits). In the
+Claude desktop app stretches are links: click one to open it in place, click `«` to close it. No
+setting needed.
 
 ## What to expect
 
@@ -76,19 +73,23 @@ never lose your place.
 - **Streaming stays clean.** While a reply streams, stretches already show as their short forms.
 - **Quieter tool calls.** A finished group of tool calls folds to Claude Code's own one-line summary
   (`Ran 3 shell commands ▸ show`). Running calls, and calls that errored, stay open.
-- **Nothing hides where clicks can't land.** On the terminal's main screen, and in apps other than
-  the terminal and the Claude desktop app, every stretch is drawn open. On the main screen, the first
-  such reply says why.
 
 ## Limits
 
+- Clicks work in the terminal's fullscreen layout and in the Claude desktop app. Everywhere else every
+  stretch shows open, so nothing is hidden: in other apps, and on the terminal's main screen, where a
+  printed reply can't change. There the first such reply says why. As of Claude Code 2.1.300, some
+  setups start on the main screen even with fullscreen set: `tmux -CC`, SSH from Windows, or a
+  machine where an earlier fullscreen start failed. Starting Claude Code with
+  `CLAUDE_CODE_NO_FLICKER=1` forces fullscreen there.
+- On Windows, clicks are reported not to work yet
+  ([#1](https://github.com/pro-vi/cc-stretch/issues/1)).
 - Claude writes every level up front, so a reply costs about as many tokens as before. You read
   less; you don't pay less.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.
 - Built on Claude Code's function-hook plugin API, which is early access and changes between
   releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294 and 2.1.300, and in
-  the Claude desktop app with 2.1.295. On Windows, clicks are reported not to work yet
-  ([#1](https://github.com/pro-vi/cc-stretch/issues/1)).
+  the Claude desktop app with 2.1.295.
 - In the Claude desktop app the plugin's tool-call folding is not drawn; the app shows its own.
 - A terminal session that also has the desktop app attached shows the markup while a reply streams,
   because the desktop builds its links from it.

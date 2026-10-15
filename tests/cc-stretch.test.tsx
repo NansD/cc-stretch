@@ -29,18 +29,21 @@ const COMPOSE = {
   traits: [],
 } as const
 
-const mountReply = ($: Engine, viewport: typeof FULLSCREEN, text = REPLY, surface: 'terminal' | 'desktop' = 'terminal') =>
+const mountReply = ($: Engine, viewport: typeof FULLSCREEN, text = REPLY, surface: 'terminal' | 'desktop' = 'terminal', requestId = 'reply-1') =>
   $.ui.mount({
     plugin: 'cc-stretch',
     surface,
     component: 'AssistantMessage',
     props: { text, isFirstOfReply: true },
-    requestId: 'reply-1',
+    requestId,
     viewport,
   })
 type Mounted = Awaited<ReturnType<typeof mountReply>>
 
 const shown = async (ui: Mounted) => (await ui.find({ type: 'Markdown' }))?.text ?? ''
+
+/** Whether the reply carries the note saying why its stretches are open. */
+const hasNote = async (ui: Mounted) => (await ui.findAll({ type: 'Text' })).some(piece => piece.text?.includes('NO_FLICKER') === true)
 
 /** The text a node shows, its children's strings joined. */
 const textOf = (node: unknown): string => {
@@ -314,12 +317,38 @@ test('a short form written over several lines is drawn open in the terminal too'
   await ui.unmount()
 })
 
-test('on the main screen, every stretch is drawn open', async $ => {
+test('on the main screen, every stretch is drawn open, and the first such reply says why', async $ => {
   const ui = await mountReply($, MAIN_SCREEN)
   expect(await shown(ui)).toContain(', set in `ci/cache.ts`')
   expect(await shown(ui)).toContain('key: {{hash}}')
   expect(await ui.find({ type: 'Client' })).toBeUndefined()
+  expect(await hasNote(ui)).toBe(true)
   await ui.unmount()
+
+  const later = await mountReply($, MAIN_SCREEN, REPLY, 'terminal', 'reply-2')
+  expect(await hasNote(later)).toBe(false)
+  await later.unmount()
+  // Drawn again, the first reply keeps it.
+  const again = await mountReply($, MAIN_SCREEN)
+  expect(await hasNote(again)).toBe(true)
+  await again.unmount()
+})
+
+test('in fullscreen or the phone app, no reply says why stretches are open', async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  expect(await hasNote(ui)).toBe(false)
+  await ui.unmount()
+  // The phone app also reports it is not fullscreen, and has no /tui to run.
+  const phone = await $.ui.mount({
+    plugin: 'cc-stretch',
+    surface: 'mobile',
+    component: 'AssistantMessage',
+    props: { text: REPLY, isFirstOfReply: true },
+    requestId: 'reply-1',
+    viewport: MAIN_SCREEN,
+  })
+  expect((await phone.findAll({ type: 'Text' })).some(piece => piece.text?.includes('NO_FLICKER') === true)).toBe(false)
+  await phone.unmount()
 })
 
 describe('desktop app', () => {

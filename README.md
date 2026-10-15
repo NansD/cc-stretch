@@ -17,7 +17,11 @@ In a Claude Code session:
 ```
 
 In the terminal, clicks need Claude Code's fullscreen renderer. `/tui fullscreen` switches to it,
-restarting and resuming your session. Without it, every stretch shows open. In the Claude desktop
+restarting and resuming your session. Without it, Claude Code prints replies to the terminal's main
+screen, where they cannot change, so every stretch shows open. As of Claude Code 2.1.300, some
+setups start on the main screen even with fullscreen set: `tmux -CC`, SSH from Windows, or a machine
+where a fullscreen start crashed. Start Claude Code with `CLAUDE_CODE_NO_FLICKER=1` to force
+fullscreen there. In the Claude desktop
 app stretches are links: click one to open it in place, click `«` to close it. No setting needed.
 
 ## What to expect
@@ -72,8 +76,9 @@ never lose your place.
 - **Streaming stays clean.** While a reply streams, stretches already show as their short forms.
 - **Quieter tool calls.** A finished group of tool calls folds to Claude Code's own one-line summary
   (`Ran 3 shell commands ▸ show`). Running calls, and calls that errored, stay open.
-- **Nothing hides where clicks can't land.** On the classic renderer, and in apps other than the
-  terminal and the Claude desktop app, every stretch is drawn open.
+- **Nothing hides where clicks can't land.** On the terminal's main screen, and in apps other than
+  the terminal and the Claude desktop app, every stretch is drawn open. On the main screen, the first
+  such reply says why.
 
 ## Limits
 

@@ -12,6 +12,12 @@ const openGroups = atom({ plugin: 'cc-stretch', key: 'groups' } as const, false)
 const stretchOrder = atom({ plugin: 'cc-stretch', key: 'order' } as const, { order: {}, count: 0 })
 const newestReply = atom({ plugin: 'cc-stretch', key: 'newest' } as const, '')
 
+// Claude Code 2.1.300 can start a session on the main screen even with fullscreen set, and the
+// variable overrides that.
+const MAIN_SCREEN_NOTE =
+  "cc-stretch: stretches are open because this session is on Claude Code's main screen, where a printed reply cannot change. " +
+  'For clickable stretches, run /tui fullscreen. If it says fullscreen is already on, start Claude Code with CLAUDE_CODE_NO_FLICKER=1, which forces fullscreen.'
+
 // The words a stretch adds are drawn in Claude Code's own theme colours (its 2.1.300 values for
 // warning, autoAccept, planMode and claude), mixed 45% toward the text colour so they tint rather
 // than shout. Each open stretch keeps its colour; all but the newest take a faded form of it, mixed
@@ -122,6 +128,9 @@ export const register: Register = on => {
     )
   })
 
+  // The reply that says why stretches are open on the main screen: the first drawn there since the
+  // plugin loaded. A render hook cannot write plugin state, so it is kept here.
+  let notedRequest: string | undefined
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     // A stretch still streaming has no closing braces yet; drawing it here keeps the raw markup
     // off the screen until it closes and becomes pressable.
@@ -185,13 +194,16 @@ export const register: Register = on => {
       )
     }
 
-    // Where a press is not known to land, every stretch is drawn open and nothing is hidden.
+    // Where a press is not known to land, every stretch is drawn open and nothing is hidden; on the
+    // main screen the first such reply says why.
     const { Box, Markdown, Text } = $.ui.resolve(e)
+    if (isMainScreen(e)) notedRequest ??= e.requestId
     return (
       <Box flexDirection="row">
         <Text>{marker}</Text>
         <Box flexDirection="column" flexShrink={1}>
           <Markdown text={writeOpen(parts)} />
+          {isMainScreen(e) && notedRequest === e.requestId && <Text dimColor>{MAIN_SCREEN_NOTE}</Text>}
         </Box>
       </Box>
     )
@@ -312,5 +324,11 @@ function lastReply(messages: SessionMessage[]): string {
 // desktop draws stretches as Markdown links instead (above).
 function canPress<E extends Pick<RenderInput, 'surface' | 'viewport'>>(e: E): e is E & { surface: 'terminal' } {
   return e.surface === 'terminal' && e.viewport?.isFullscreen === true
+}
+
+// The terminal's main screen prints each reply into its scrollback, where nothing can change it.
+// Unknown is not the main screen, and the phone app's `false` is not the terminal's.
+function isMainScreen(e: Pick<RenderInput, 'surface' | 'viewport'>): boolean {
+  return e.surface === 'terminal' && e.viewport?.isFullscreen === false
 }
 

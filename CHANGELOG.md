@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.4 — 2026-10-15
+
+- In fullscreen on Claude Code 2.1.300, a new reply's stretches are underlined and open on a click
+  again. That version hands the plugin a finished reply with its long forms already hidden, so the
+  short forms showed as plain text; a session resumed with `--continue` was not affected
+  ([#3](https://github.com/pro-vi/cc-stretch/issues/3)). Contributed by @danielhernik in
+  [#5](https://github.com/pro-vi/cc-stretch/pull/5).
+
 ## 0.3.3 — 2026-10-15
 
 - The guide sent to Claude is back to its 0.3.1 text. The line 0.3.2 added, asking that a short form

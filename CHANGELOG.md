@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1 — 2026-10-15
+
+- On Claude Code's main screen, where a printed reply cannot change and so every stretch shows open,
+  the first such reply now says why in a dim line, and how to get clickable stretches: `/tui
+  fullscreen`, or starting Claude Code with `CLAUDE_CODE_NO_FLICKER=1` in setups that start on the
+  main screen anyway ([#3](https://github.com/pro-vi/cc-stretch/issues/3)).
+- The README names those setups.
+
 ## 0.3.0 — 2026-10-15
 
 - In the terminal, the words a stretch adds are drawn in a colour of their own, a different one for

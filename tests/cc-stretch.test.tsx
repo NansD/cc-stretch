@@ -3,7 +3,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { grow } from '../hooks/grow'
-import { layout, link, linkAt, widthOf } from '../hooks/layout'
+import { layout, link, linkAt, tint, widthOf } from '../hooks/layout'
 import { hideLongForms, paragraphsOf, parse, stretches } from '../hooks/parse'
 
 const REPLY = [
@@ -190,6 +190,16 @@ describe('layout', () => {
     expect(rows[1]?.map(run => run.text).join('')).toBe('  let x = {{y}}')
   })
 
+  test('a code span or a link label tinted word by word draws whole, and the tint ends where its words do', async () => {
+    const added = (word: string) => tint('#d3bdff', word)
+    const text = `${added('Run')} ${added('`claude')} ${added('plugin')} install\` and ${added('[the')} ${added('docs')} page](https://x.invalid/a) now`
+    const runs = layout(text, 80)[0] ?? []
+    expect(runs.map(run => run.text).join('')).toBe('Run claude plugin install and the docs page (https://x.invalid/a) now')
+    expect(runs.filter(run => run.code).map(run => run.text)).toEqual(['claude plugin install'])
+    expect(runs.filter(run => run.underline).map(run => [run.text, run.tint])).toEqual([['the docs ', '#d3bdff'], ['page', undefined]])
+    expect(runs.find(run => run.text.includes('and'))?.tint).toBeUndefined()
+  })
+
   test('counts wide characters as two cells', async () => {
     expect(widthOf('漢字ab')).toBe(6)
     expect(layout('漢字漢字 漢字', 8).map(row => row.map(run => run.text).join(''))).toEqual(['漢字漢字', '漢字'])
@@ -255,6 +265,47 @@ test('what the reader opened survives the reply being drawn again', async $ => {
   expect(await textIn(again, 'paragraph-1')).toContain('  key: {{hash}}')
   expect(await textIn(again)).toContain('on a stale cache.')
   await again.unmount()
+})
+
+test('in the terminal, a « after a rule or a code fence goes on its own line and stays pressable', async $ => {
+  const text = ['{{Status.|---', '', '- [x] Done', '', '---}}', '', 'Then {{the fix|the fix:', '```', 'key: 1', '```', '}}'].join('\n')
+  const ui = await mountReply($, FULLSCREEN, text)
+  await pressOn(ui, 'Status.')
+  await pressOn(ui, 'the fix', { key: 'paragraph-1' })
+  await ui.advance(2000)
+  const rows = await rowsOf(ui)
+  expect(rows.at(-2)).toMatch(/^─+$/)
+  expect(rows.at(-1)).toBe('«')
+  expect((await rowsOf(ui, 'paragraph-1')).slice(-2)).toEqual(['  key: 1', '«'])
+  await pressOn(ui, '«', { last: true })
+  await ui.advance(2000)
+  expect(await textIn(ui)).toBe('Status.')
+  await ui.unmount()
+})
+
+test('the words a stretch adds take its colour, faded once another opens or the reader writes again', async ($, on) => {
+  const text = 'One {{cat|cat, black,}} and {{dog|dog, brown,}} here.'
+  on('session.messages', () => ({ value: [{ role: 'assistant', text, toolUses: [] }] }))
+  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context }))
+  const ui = await mountReply($, FULLSCREEN, text)
+  const colourOf = async (text: string) => (await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text?.trim() === text)?.props.color
+  await pressOn(ui, 'cat')
+  await ui.advance(2000)
+  expect(await textIn(ui)).toBe('One cat, black, « and dog here.')
+  expect(await colourOf('black,')).toBe('#ffdd77')
+  expect(await colourOf('cat,')).toBeUndefined()
+
+  await pressOn(ui, 'dog')
+  await ui.advance(2000)
+  expect(await colourOf('brown,')).toBe('#d3bdff')
+  expect(await colourOf('black,')).toBe('#a6904d')
+  // A closer keeps its stretch's unfaded colour, as a faded one reads as disabled.
+  const closers = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => piece.text === '«')
+  expect(closers.map(piece => piece.props.color)).toEqual(['#ffdd77', '#d3bdff'])
+
+  await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
+  expect(await colourOf('brown,')).toBe('#897ba6')
+  await ui.unmount()
 })
 
 test('a short form written over several lines is drawn open in the terminal too', async $ => {
@@ -330,6 +381,16 @@ describe('desktop app', () => {
     expect(await shown(ui)).toContain('1) install the plugin [«]')
     expect(await shown(ui)).toContain('`arr[0]` is empty when the list is [«]')
     expect(await shown(ui)).toContain(`${long}, and more [«]`)
+    await ui.unmount()
+  })
+
+  test('a « after a rule or a code fence goes on its own line', async $ => {
+    const text = ['{{Status.|---', '', '- [x] Done', '', '---}}', '', 'Then {{the fix|the fix:', '```', 'key: {{hash}}', '```', '}}'].join('\n')
+    const ui = await mountReply($, FULLSCREEN, text, 'desktop')
+    await ui.press({ key: 'stretch', link: { href: linkTo('open', 'Status.', text) } })
+    await ui.press({ key: 'stretch', link: { href: linkTo('open', 'the fix', text) } })
+    expect(await shown(ui)).toContain(`- [x] Done\n\n---\n\n[«](${linkTo('close', 'Status.', text)})`)
+    expect(await shown(ui)).toContain(`key: {{hash}}\n\`\`\`\n\n[«](${linkTo('close', 'the fix', text)})`)
     await ui.unmount()
   })
 

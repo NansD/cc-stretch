@@ -2,13 +2,31 @@ import { atom, memberOf, read, update } from 'claude-code'
 import type { Register, RenderInput, SessionMessage } from 'claude-code'
 
 import { GUIDE } from './guide'
-import { codeSpanEnd, hideLongForms, isLinkable, isOpenable, KEY_SEPARATOR, paragraphsOf, parse, stretches } from './parse'
+import { closeAfter, codeSpanEnd, hideLongForms, isLinkable, isOpenable, KEY_SEPARATOR, paragraphsOf, parentOf, parse, stretches } from './parse'
 import type { Segment, StreamState, Stretch } from './parse'
-import type { ReplyPost, ReplyProps } from './reply'
+import type { ReplyPost, ReplyProps, Tint } from './reply'
 
 const openStretches = atom({ plugin: 'cc-stretch', key: 'open' } as const, [])
 const seen = atom({ plugin: 'cc-stretch', key: 'seen' } as const, [])
 const openGroups = atom({ plugin: 'cc-stretch', key: 'groups' } as const, false)
+const stretchOrder = atom({ plugin: 'cc-stretch', key: 'order' } as const, { order: {}, count: 0 })
+const newestReply = atom({ plugin: 'cc-stretch', key: 'newest' } as const, '')
+
+// The words a stretch adds are drawn in Claude Code's own theme colours (its 2.1.300 values for
+// warning, autoAccept, planMode and claude), mixed 45% toward the text colour so they tint rather
+// than shout. Each open stretch keeps its colour; all but the newest take a faded form of it, mixed
+// 35% toward the background, quieter but still that colour.
+const BASE = {
+  dark: [[255, 193, 7], [175, 135, 255], [72, 150, 140], [215, 119, 87]],
+  light: [[150, 108, 30], [135, 0, 255], [0, 102, 102], [215, 119, 87]],
+}
+const mix = (rgb: number[], toward: number, share: number) => rgb.map(v => Math.round(v + (toward - v) * share))
+const hex = (rgb: number[]) => `#${rgb.map(v => v.toString(16).padStart(2, '0')).join('')}`
+const paletteOf = (base: number[][], text: number, background: number) =>
+  base.map(rgb => mix(rgb, text, 0.45)).map(soft => ({ soft: hex(soft), faded: hex(mix(soft, background, 0.35)) }))
+const PALETTES = { dark: paletteOf(BASE.dark, 255, 0), light: paletteOf(BASE.light, 0, 255) }
+/** How many colours open stretches take in turn. */
+const HUES = BASE.dark.length
 
 // Every link the mod draws is answered by the mod: a click opens or closes,
 // and the link is never followed. A ctrl- or cmd-click opens it in a browser,
@@ -58,6 +76,7 @@ export const register: Register = on => {
       .map(stretch => stretch.short.trim())
     const unopened = written.filter(short => !opened.includes(short))
     await update($, seen, () => [])
+    await update($, newestReply, () => '')
     if (opened.length === 0 && unopened.length === 0) return next(e)
 
     const quote = (list: string[]) => list.map(s => `"${s}"`).join(', ')
@@ -141,12 +160,19 @@ export const register: Register = on => {
       // A paragraph holding a stretch is drawn by a Client, on the screen's side; the rest is
       // Claude Code's own markdown.
       const { Box, Client, Markdown, Text } = $.ui.resolve(e)
+      const [{ order, count }, newest] = await Promise.all([read($, memberOf(stretchOrder, { requestId: e.requestId })), read($, newestReply)])
+      // The theme matters only once a stretch in this reply is open and so tinted.
+      const isLight =
+        Object.keys(order).length > 0 &&
+        (await $.config.list().catch(() => [])).some(row => row.key === 'theme' && String(row.value).startsWith('light'))
+      const palette = isLight ? PALETTES.light : PALETTES.dark
       const parts = await Promise.all(
         paragraphsOf(e.props.text).map(async (paragraph, i) => {
           if (!paragraph.hasStretch) return <Markdown text={paragraph.text} />
           const key = `paragraph-${i}`
           const open = await read($, memberOf(openStretches, { requestId: `${e.requestId}#${key}` }))
-          return <Client key={key} module="./reply.tsx" props={{ text: paragraph.text, open } satisfies ReplyProps} width="100%" />
+          const tints = tintsOf(order, key, newest === e.requestId ? count - 1 : -1, palette)
+          return <Client key={key} module="./reply.tsx" props={{ text: paragraph.text, open, tints } satisfies ReplyProps} width="100%" />
         }),
       )
       return (
@@ -171,21 +197,49 @@ export const register: Register = on => {
     )
   })
 
-  // A paragraph's Client posts the stretches open in it whenever they change, and the short form
-  // of one the reader just opened. Kept here, they survive a redraw and reach the next prompt.
+  // A paragraph's Client posts the stretches open in it whenever they change, and the one the reader
+  // just opened. Kept here, they survive a redraw, reach the next prompt and keep their colours.
   on('ui.message', async ($, e, next) => {
     const post = e.module.endsWith('reply.tsx') ? replyPostOf(e.data) : undefined
     if (post === undefined) return next(e)
     await update($, memberOf(openStretches, { requestId: `${e.requestId}#${e.element}` }), () => post.open)
-    const opened = post.opened
-    if (opened !== undefined) await update($, seen, list => (list.includes(opened) ? list : [...list, opened]))
+    const { opened } = post
+    if (opened !== undefined) await update($, seen, list => (list.includes(opened.short) ? list : [...list, opened.short]))
+
+    // Each open stretch keeps the count it was opened at, across the reply's paragraphs; a nested
+    // one skips its parent's colour. The newest is the open stretch with the reply's last count.
+    const here = `${e.element}#`
+    await update($, memberOf(stretchOrder, { requestId: e.requestId }), ({ order, count }) => {
+      const kept = Object.fromEntries(Object.entries(order).filter(([at]) => !at.startsWith(here) || post.open.includes(at.slice(here.length))))
+      if (opened === undefined) return { order: kept, count }
+      const parent = kept[`${here}${parentOf(opened.key)}`]
+      const n = parent !== undefined && count % HUES === parent % HUES ? count + 1 : count
+      return { order: { ...kept, [`${here}${opened.key}`]: n }, count: n + 1 }
+    })
+    if (opened !== undefined) await update($, newestReply, () => e.requestId)
     return next(e)
   })
 }
 
 /**
+ * The tint of each open stretch in one paragraph: its colour by the count it was opened at, faded
+ * unless it was opened at `newest`.
+ */
+function tintsOf(order: Record<string, number>, paragraph: string, newest: number, palette: { soft: string; faded: string }[]): Record<string, Tint> {
+  const here = `${paragraph}#`
+  return Object.fromEntries(
+    Object.entries(order)
+      .filter(([at]) => at.startsWith(here))
+      .flatMap(([at, n]) => {
+        const colours = palette[n % palette.length]
+        return colours === undefined ? [] : [[at.slice(here.length), { words: n === newest ? colours.soft : colours.faded, closer: colours.soft }]]
+      }),
+  )
+}
+
+/**
  * A reply as markdown for the desktop: each closed stretch a link, each open one its long form then a
- * «. A link names its stretch by its place in `all`, not by its key, which can hold any character and
+ * «, on a line of its own after a rule or a code fence. A link names its stretch by its place in `all`, not by its key, which can hold any character and
  * run past the 2048 characters a `pressableLinks` entry may have (Claude Code 2.1.295).
  */
 function linkedMarkdown(parts: Segment[], open: readonly string[], all: Stretch[], links: string[]): string {
@@ -199,7 +253,7 @@ function linkedMarkdown(parts: Segment[], open: readonly string[], all: Stretch[
       if (open.includes(part.key)) {
         const close = `${HREF}close/${index}`
         links.push(close)
-        return `${linkedMarkdown(part.long, open, all, links)} [«](${close})`
+        return closeAfter(linkedMarkdown(part.long, open, all, links), `[«](${close})`, '\n\n')
       }
       const href = `${HREF}open/${index}`
       links.push(href)
@@ -235,9 +289,11 @@ function writeOpen(parts: Segment[]): string {
 function replyPostOf(data: unknown): ReplyPost | undefined {
   if (typeof data !== 'object' || data === null || !('open' in data) || !Array.isArray(data.open)) return undefined
   const open = data.open.filter((key): key is string => typeof key === 'string')
-  const opened = 'opened' in data && typeof data.opened === 'string' ? data.opened : undefined
+  const opened: unknown = 'opened' in data ? data.opened : undefined
+  if (typeof opened !== 'object' || opened === null || !('short' in opened) || !('key' in opened)) return { open }
+  const { short, key } = opened
 
-  return opened === undefined ? { open } : { open, opened }
+  return typeof short === 'string' && typeof key === 'string' ? { open, opened: { short, key } } : { open }
 }
 
 /** The text of the model's last reply: its rows after the person's last prompt. */

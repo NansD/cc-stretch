@@ -1,20 +1,30 @@
 import type { ClientModule, ClientSurface, TextProps } from 'claude-code'
 
 import { grow, lengthOf } from './grow'
-import { layout, link, linkAt } from './layout'
+import { isMarkup, layout, link, linkAt, tint } from './layout'
 import type { Row, Run } from './layout'
-import { isLinkable, KEY_SEPARATOR, parse, stretches } from './parse'
+import { closeAfter, isLinkable, KEY_SEPARATOR, parse, stretches } from './parse'
 import type { Segment, Stretch } from './parse'
 
 // Draws one paragraph of a reply that holds stretches. It runs where the reader's screen draws it,
 // so a press answers at once and the growth moves on the screen's own frame clock. What the reader
-// opens is posted to the hooks module, which keeps it across redraws and notes it for Claude.
+// opens is posted to the hooks module, which keeps it across redraws, notes it for Claude and picks
+// its colour.
 
-/** The paragraph, and the stretches the reader already has open in it. */
-export type ReplyProps = { text: string; open: string[] }
+/**
+ * The colours of an open stretch: of the words it added (faded unless it is the newest) and of its
+ * closer, which never fades, as a faded closer reads as disabled.
+ */
+export type Tint = { words: string; closer: string }
 
-/** What the instance posts to the hooks module when the open stretches change. */
-export type ReplyPost = { open: string[]; opened?: string }
+/** The paragraph, the stretches the reader already has open in it, and the tint of each. */
+export type ReplyProps = { text: string; open: string[]; tints: Record<string, Tint> }
+
+/**
+ * What the instance posts to the hooks module when the open stretches change, with the stretch the
+ * reader just opened: its short form for the note to Claude, its key for its colour.
+ */
+export type ReplyPost = { open: string[]; opened?: { short: string; key: string } }
 
 type Growth = { key: string; isOpening: boolean; progress: number; duration: number }
 type State = { open: string[]; growth: Growth | null }
@@ -35,7 +45,7 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   }
   const state = surface.state ?? { open: props.open, growth: null }
   const segments = parse(props.text)
-  const rows = layout(compose(segments, state), surface.columns > 0 ? surface.columns : 80)
+  const rows = layout(compose(segments, state, props.tints), surface.columns > 0 ? surface.columns : 80)
   drawn.set(surface, { rows, segments })
 
   return (
@@ -49,16 +59,23 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
 
 export default Reply
 
-/** The paragraph as the reader sees it now: closed stretches as pressable short forms, open ones in full. */
-function compose(segments: Segment[], state: State): string {
+/**
+ * The paragraph as the reader sees it now: closed stretches as pressable short forms, open ones in
+ * full then a «, the words each added in its tint.
+ */
+function compose(segments: Segment[], state: State, tints: Record<string, Tint>): string {
   const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
   const draw = (stretch: Stretch): string => {
     if (stretch.long === undefined || !stretch.isClosed) return stretch.short
     // A short form over several lines is drawn open, or as written when its long form is empty.
     if (!isLinkable(stretch)) return stretch.long.length === 0 ? stretch.short : write(stretch.long)
-    if (state.growth?.key === stretch.key) return grow(stretch.short, stretch.long, easeInOut(state.growth.progress), draw)
+    const colours = tints[stretch.key]
+    const paint = (word: string) => (colours === undefined || isMarkup(word) ? word : tint(colours.words, word))
+    if (state.growth?.key === stretch.key) return grow(stretch.short, stretch.long, easeInOut(state.growth.progress), draw, paint)
     if (!state.open.includes(stretch.key)) return link('open', stretch.key, stretch.short)
-    return `${write(stretch.long)} ${link('close', stretch.key, '«')}`
+    const closer = link('close', stretch.key, '«')
+    const long = grow(stretch.short, stretch.long, 1, draw, paint)
+    return closeAfter(long, colours === undefined ? closer : tint(colours.closer, closer), '\n')
   }
 
   return write(segments)
@@ -79,7 +96,7 @@ function press(surface: ClientSurface<State>, x: number, y: number) {
   if (target.action === 'open') {
     const next = [...open.filter(key => key !== stretch.key), stretch.key]
     surface.setState({ open: next, growth: { key: stretch.key, isOpening: true, progress: 0, duration } })
-    surface.post({ open: next, opened: stretch.short.trim() } satisfies ReplyPost)
+    surface.post({ open: next, opened: { short: stretch.short.trim(), key: stretch.key } } satisfies ReplyPost)
   } else {
     surface.setState({ open, growth: { key: stretch.key, isOpening: false, progress: 1, duration } })
   }
@@ -110,9 +127,11 @@ function styleOf(run: Run): TextProps {
     ...(run.italic && { italic: true }),
     ...(run.underline && { underline: true }),
     ...(run.dim && { dimColor: true }),
+    ...(run.tint && { color: run.tint }),
     ...(run.code && { color: 'permission' }),
-    // Underlined marks what a press acts on: code shares the link's blue in some themes.
-    ...(run.link && { color: 'suggestion', underline: true }),
+    // Underlined, in the text's own colour, marks what a press acts on, leaving colour to code and
+    // to the words a click added. A closer is tinted like them, in its stretch's unfaded colour.
+    ...(run.link && { underline: true }),
   }
 }
 

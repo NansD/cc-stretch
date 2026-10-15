@@ -16,12 +16,19 @@ type Side = 'before' | 'between' | 'after'
 
 /**
  * The long form at `progress`: 0 shows only the anchors, 1 shows all of it.
- * `draw` writes a nested stretch, which is never shown in part.
+ * `draw` writes a nested stretch, which is never shown in part; `paint` marks each word the long
+ * form adds, so the reader can tell it from the words they already read.
  */
-export function grow(short: string, long: Segment[], progress: number, draw: (nested: Stretch) => string): string {
+export function grow(
+  short: string,
+  long: Segment[],
+  progress: number,
+  draw: (nested: Stretch) => string,
+  paint: (word: string) => string = word => word,
+): string {
   const tokens = tokenize(long)
   const anchors = anchorsOf(short, tokens)
-  const shown = (atoms: Atom[]) => atoms.map(atom => (typeof atom === 'string' ? atom : draw(atom))).join('')
+  const shown = (atoms: Atom[]) => atoms.map(atom => (typeof atom !== 'string' ? draw(atom) : /\S/.test(atom) ? paint(atom) : atom)).join('')
 
   let out = ''
   let run: Atom[] = []

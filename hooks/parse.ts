@@ -32,6 +32,29 @@ export function isLinkable(stretch: Stretch): boolean {
   return isOpenable(stretch) && !stretch.short.includes('\n')
 }
 
+/**
+ * An open stretch's long form followed by its `closer`, after a space, or after `gap` when the long
+ * form ends in a line text after it would change: a rule, which then reads as plain dashes, or a code
+ * fence, which then no longer closes.
+ */
+export function closeAfter(long: string, closer: string, gap: string): string {
+  const trimmed = long.trimEnd()
+  const last = trimmed.slice(trimmed.lastIndexOf('\n') + 1)
+  const endsInBlock = isRule(last) || /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/.test(last)
+
+  return endsInBlock ? `${trimmed}${gap}${closer}` : `${long} ${closer}`
+}
+
+/** Whether `line` is a rule: three or more of one of `-`, `*` and `_`, spaces between allowed. */
+export function isRule(line: string): boolean {
+  return /^ {0,3}([-*_])(?:[ \t]*\1){2,}[ \t]*$/.test(line)
+}
+
+/** The key of the stretch holding the one keyed `key`, or '' when no stretch holds it. */
+export function parentOf(key: string): string {
+  return key.split(KEY_SEPARATOR).slice(0, -1).join(KEY_SEPARATOR)
+}
+
 /** Where the code span opening at `i` ends: past the next run of as many backticks, or at the text's end. */
 export function codeSpanEnd(text: string, i: number): number {
   const run = /^`+/.exec(text.slice(i))?.[0] ?? '`'

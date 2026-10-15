@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.3 — 2026-10-15
+
+- The guide sent to Claude is back to its 0.3.1 text. The line 0.3.2 added, asking that a short form
+  never be a label such as "What changed.", did not reduce such labels when 11 real replies were
+  rewritten under both guides, and it made the shortest reading slightly longer.
+
 ## 0.3.2 — 2026-10-15
 
 - Claude is told that each short form must say something itself, the gist of its long form. A label

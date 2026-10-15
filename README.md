@@ -16,8 +16,9 @@ In a Claude Code session:
 /tui fullscreen
 ```
 
-Clicks need Claude Code's fullscreen renderer. `/tui fullscreen` switches to it, restarting and
-resuming your session. Without it, every stretch shows open.
+In the terminal, clicks need Claude Code's fullscreen renderer. `/tui fullscreen` switches to it,
+restarting and resuming your session. Without it, every stretch shows open. In the Claude desktop
+app stretches are links: click one to open it in place, click `«` to close it. No setting needed.
 
 ## What to expect
 
@@ -81,7 +82,8 @@ never lose your place.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.
 - Built on Claude Code's function-hook plugin API, which is early access and changes between
   releases. Checked on Claude Code 2.1.292 to 2.1.294.
-- In the Claude desktop app every stretch shows open for now. Clickable stretches there are planned.
+- In the Claude desktop app the plugin's tool-call folding is not drawn; the app shows its own.
+  Desktop links checked on Claude Code 2.1.295.
 
 ## Development
 

@@ -116,8 +116,9 @@ describe('streaming', () => {
     expect(hideLongForms('}} done.', { open: [{ isLong: true }], fence: undefined })).toBe(' done.')
   })
 
-  test('the display of a streaming reply never shows the markup', async ($, on) => {
+  test('the display of a streaming reply never shows the markup in a terminal', async ($, on) => {
     on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
     const flush = (index: number, delta: string, final = false) =>
       $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
     expect((await flush(0, 'A monad is {{a wrapper|a wrapper, like')).displayContent).toBe('A monad is a wrapper')
@@ -239,18 +240,81 @@ test('what the reader opened survives the reply being drawn again', async $ => {
   await again.unmount()
 })
 
-for (const [where, surface, viewport] of [
-  ['the main screen', 'terminal', MAIN_SCREEN],
-  ['the desktop app', 'desktop', FULLSCREEN],
-] as const) {
-  test(`on ${where}, every stretch is drawn open`, async $ => {
-    const ui = await mountReply($, viewport, REPLY, surface)
-    expect(await shown(ui)).toContain(', set in `ci/cache.ts`')
-    expect(await shown(ui)).toContain('key: {{hash}}')
+test('on the main screen, every stretch is drawn open', async $ => {
+  const ui = await mountReply($, MAIN_SCREEN)
+  expect(await shown(ui)).toContain(', set in `ci/cache.ts`')
+  expect(await shown(ui)).toContain('key: {{hash}}')
+  expect(await ui.find({ type: 'Client' })).toBeUndefined()
+  await ui.unmount()
+})
+
+describe('desktop app', () => {
+  const linkTo = (action: 'open' | 'close', key: string) => `${HREF}${action}/${encodeURIComponent(key)}`
+  const OUTER = 'on a stale cache'
+  const INNER = `${OUTER} › , set in one file`
+
+  test('a stretch is a link that grows in place, and « shrinks it with what it holds', async $ => {
+    const ui = await mountReply($, FULLSCREEN, REPLY, 'desktop')
+    const press = (action: 'open' | 'close', key: string) => ui.press({ key: 'stretch', link: { href: linkTo(action, key) } })
     expect(await ui.find({ type: 'Client' })).toBeUndefined()
+    expect(await shown(ui)).toContain(`The build fails [on a stale cache](${linkTo('open', OUTER)}).`)
+    expect(await shown(ui)).not.toContain('`package.json`')
+
+    await press('open', OUTER)
+    expect(await shown(ui)).toContain(
+      `The build fails because the cache key hashes only \`package.json\`[, set in one file](${linkTo('open', INNER)}) [«](${linkTo('close', OUTER)}).`,
+    )
+    await press('open', INNER)
+    expect(await shown(ui)).toContain(', set in `ci/cache.ts`')
+
+    await press('close', OUTER)
+    expect(await shown(ui)).toContain(`The build fails [on a stale cache](${linkTo('open', OUTER)}).`)
+    await press('open', OUTER)
+    expect(await shown(ui)).not.toContain('ci/cache.ts')
+    // Code keeps its braces, and a stretch holding a fence opens to it whole.
+    expect(await shown(ui)).toContain('Braces in code stay: `{{a|b}}`.')
+    await press('open', 'The fix is one line.')
+    expect(await shown(ui)).toContain('key: {{hash}}')
     await ui.unmount()
   })
-}
+
+  test('a short form written over several lines is drawn open, as a link cannot span them', async $ => {
+    const list = ['{{- Admin: https://admin.example.com', '- `example.com` is a test address.|}}'].join('\n')
+    const listed = ['{{- one', '- two|- one, first', '- two, second}}'].join('\n')
+    const ui = await mountReply($, FULLSCREEN, `${list}\n\n${listed}`, 'desktop')
+    expect(await shown(ui)).toBe(['- Admin: https://admin.example.com', '- `example.com` is a test address.', '', '- one, first', '- two, second'].join('\n'))
+    await ui.unmount()
+  })
+
+  test('what the reader opened is told to the model with the next prompt', async ($, on) => {
+    on('session.messages', () => ({
+      value: [
+        { role: 'user', text: 'why does CI fail?', toolUses: [] },
+        { role: 'assistant', text: REPLY, toolUses: [] },
+      ],
+    }))
+    let context: readonly string[] | undefined
+    on('prompt.submit', ($, e) => {
+      context = e.context
+      return { text: e.text, context: e.context }
+    })
+
+    const ui = await mountReply($, FULLSCREEN, REPLY, 'desktop')
+    await ui.press({ key: 'stretch', link: { href: linkTo('open', OUTER) } })
+    await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
+    expect(context).toEqual([
+      'Stretchtext: since your last reply the reader opened "on a stale cache". They did not open ", set in one file", "The fix is one line.".',
+    ])
+    await ui.unmount()
+  })
+
+  test('a reply streaming to the desktop app keeps its markup, which its links are made from', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['desktop'] }))
+    const flush = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: true, delta: 'A monad is {{a wrapper|a wrapper.}}' })
+    expect(flush.displayContent).toBeUndefined()
+  })
+})
 
 test('a reply without a stretch is drawn by the engine', async ($, on) => {
   on('ui.render', { component: 'AssistantMessage' }, ($, e) => {

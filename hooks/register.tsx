@@ -2,7 +2,7 @@ import { atom, memberOf, read, update } from 'claude-code'
 import type { Register, RenderInput, SessionMessage } from 'claude-code'
 
 import { GUIDE } from './guide'
-import { hideLongForms, isOpenable, paragraphsOf, parse, stretches } from './parse'
+import { hideLongForms, isOpenable, KEY_SEPARATOR, paragraphsOf, parse, stretches } from './parse'
 import type { Segment, StreamState } from './parse'
 import type { ReplyPost, ReplyProps } from './reply'
 
@@ -23,6 +23,10 @@ export const register: Register = on => {
   const streams = new Map<string, StreamState>()
   on('classic.MessageDisplay', async ($, e, next) => {
     const answer = await next(e)
+    // The desktop app draws a finished reply from this display text, so hiding the long forms here
+    // would strip the markup its links are made from. Only a session drawn by terminals alone gets
+    // the filter.
+    if (!(await $.session.surfaces()).every(surface => surface === 'terminal')) return answer
     const state = streams.get(e.message_id) ?? { open: [], fence: undefined }
     const shown = hideLongForms(answer.displayContent ?? e.delta, state)
     if (e.final) streams.delete(e.message_id)
@@ -102,6 +106,31 @@ export const register: Register = on => {
     // off the screen until it closes and becomes pressable.
     if (e.props.isSummary === true || stretches(parse(e.props.text)).length === 0) return next(e)
 
+    // The desktop app draws markdown links and hands a press on one to the plugin: the whole block is
+    // one Markdown whose closed stretches are links that open in place, each open one ending in a «.
+    if (e.surface === 'desktop') {
+      const { Markdown } = $.ui.resolve(e)
+      const parts = parse(e.props.text)
+      const open = memberOf(openStretches, { requestId: `${e.requestId}#desktop` })
+      const links: string[] = []
+      const text = linkedMarkdown(parts, await read($, open), links)
+      // Open that stretch, or close it with every stretch inside it. Opening one is what the next
+      // prompt reports, as a press in the terminal is.
+      const press = async (href: string) => {
+        const [action, encoded] = href.slice(HREF.length).split('/')
+        const key = decodeURIComponent(encoded ?? '')
+        if (action === 'close') {
+          await update($, open, list => list.filter(k => k !== key && !k.startsWith(key + KEY_SEPARATOR)))
+          return
+        }
+        if (action !== 'open') return
+        await update($, open, list => (list.includes(key) ? list : [...list, key]))
+        const short = stretches(parts).find(stretch => stretch.key === key)?.short.trim()
+        if (short !== undefined) await update($, seen, list => (list.includes(short) ? list : [...list, short]))
+      }
+      return <Markdown key="stretch" text={text} pressableLinks={links} onLinkPress={link => void press(link.href)} />
+    }
+
     const marker = e.props.isFirstOfReply ? '⏺ ' : '  '
     if (canPress(e)) {
       // A paragraph holding a stretch is drawn by a Client, on the screen's side; the rest is
@@ -149,6 +178,27 @@ export const register: Register = on => {
   })
 }
 
+/** A reply as markdown for the desktop: each closed stretch a link, each open one its long form then a «. */
+function linkedMarkdown(parts: Segment[], open: readonly string[], links: string[]): string {
+  return parts
+    .map(part => {
+      if (typeof part === 'string') return part
+      if (!isOpenable(part) || part.long === undefined) return part.short
+      // A markdown link cannot span lines, so a short form written over several is drawn open, or
+      // as written when its long form is empty.
+      if (part.short.includes('\n')) return part.long.length === 0 ? part.short : linkedMarkdown(part.long, open, links)
+      if (open.includes(part.key)) {
+        const close = `${HREF}close/${encodeURIComponent(part.key)}`
+        links.push(close)
+        return `${linkedMarkdown(part.long, open, links)} [«](${close})`
+      }
+      const href = `${HREF}open/${encodeURIComponent(part.key)}`
+      links.push(href)
+      return `[${part.short.replace(/([[\]\\])/g, '\\$1')}](${href})`
+    })
+    .join('')
+}
+
 /** A reply with every stretch drawn as its long form. */
 function writeOpen(parts: Segment[]): string {
   return parts.map(part => (typeof part === 'string' ? part : part.long === undefined ? part.short : writeOpen(part.long))).join('')
@@ -174,8 +224,8 @@ function lastReply(messages: SessionMessage[]): string {
   return texts.join('\n')
 }
 
-// A press is known to land only in the fullscreen terminal: a press on a markdown link is documented
-// for it alone, and in the desktop app (Claude Code 2.1.293) a press on a one-cell « missed.
+// A press on a Client is known to land only in the fullscreen terminal: in the desktop app (Claude
+// Code 2.1.293) a press on a one-cell « missed. The desktop draws Markdown links instead (above).
 function canPress<E extends Pick<RenderInput, 'surface' | 'viewport'>>(e: E): e is E & { surface: 'terminal' } {
   return e.surface === 'terminal' && e.viewport?.isFullscreen === true
 }

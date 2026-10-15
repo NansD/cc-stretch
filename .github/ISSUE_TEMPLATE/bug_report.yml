@@ -1,0 +1,56 @@
+name: Bug report
+description: Stretches don't show, don't open, or look wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying cc-stretch. The plugin is built on Claude Code's function-hook API, which changes between releases, so the version and where you run it matter most.
+  - type: input
+    id: claude-version
+    attributes:
+      label: Claude Code version
+      description: Output of `claude --version`
+      placeholder: 2.1.300 (Claude Code)
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where you run it
+      options:
+        - Terminal, fullscreen renderer (/tui fullscreen)
+        - Terminal, classic renderer
+        - Claude desktop app
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: OS and terminal app
+      placeholder: Windows 11, Windows Terminal
+    validations:
+      required: true
+  - type: dropdown
+    id: seen
+    attributes:
+      label: What a reply looks like
+      options:
+        - "Raw markup: I see {{short|long}}"
+        - Every stretch is already open, nothing to click
+        - Short forms are underlined, but clicking does nothing
+        - Something else (describe below)
+    validations:
+      required: true
+  - type: textarea
+    id: plugin-list
+    attributes:
+      label: Plugin status
+      description: The cc-stretch lines from `claude plugin list`
+      render: text
+  - type: textarea
+    id: details
+    attributes:
+      label: What happened
+      description: Steps, a screenshot, or anything else that helps.

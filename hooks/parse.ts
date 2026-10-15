@@ -27,6 +27,18 @@ export function isOpenable(stretch: Stretch): boolean {
   return stretch.isClosed && stretch.long !== undefined
 }
 
+/** Whether a stretch is drawn as a link: openable, with its short form on one line, as a link cannot span lines. */
+export function isLinkable(stretch: Stretch): boolean {
+  return isOpenable(stretch) && !stretch.short.includes('\n')
+}
+
+/** Where the code span opening at `i` ends: past the next run of as many backticks, or at the text's end. */
+export function codeSpanEnd(text: string, i: number): number {
+  const run = /^`+/.exec(text.slice(i))?.[0] ?? '`'
+  const end = text.indexOf(run, i + run.length)
+  return end === -1 ? text.length : end + run.length
+}
+
 export function parse(text: string): Segment[] {
   const root: Segment[] = []
   const stack: Frame[] = []
@@ -57,9 +69,7 @@ export function parse(text: string): Segment[] {
     }
 
     if (text[i] === '`') {
-      const run = /^`+/.exec(text.slice(i))?.[0] ?? '`'
-      const end = text.indexOf(run, i + run.length)
-      const stop = end === -1 ? text.length : end + run.length
+      const stop = codeSpanEnd(text, i)
       write(text.slice(i, stop))
       i = stop
       continue
@@ -158,9 +168,7 @@ export function hideLongForms(lines: string, state: StreamState): string {
         const top = state.open.at(-1)
         const isShown = state.open.length === 0 || (state.open.length === 1 && top?.isLong === false)
         if (line[i] === '`') {
-          const run = /^`+/.exec(line.slice(i))?.[0] ?? '`'
-          const end = line.indexOf(run, i + run.length)
-          const stop = end === -1 ? line.length : end + run.length
+          const stop = codeSpanEnd(line, i)
           if (isShown) out += line.slice(i, stop)
           i = stop - 1
         } else if (line.startsWith('{{', i) && top?.isLong !== false) {
@@ -231,9 +239,7 @@ function depthAfter(line: string, depth: number): number {
   let open = depth
   for (let i = 0; i < line.length; i++) {
     if (line[i] === '`') {
-      const run = /^`+/.exec(line.slice(i))?.[0] ?? '`'
-      const end = line.indexOf(run, i + run.length)
-      i = end === -1 ? line.length : end + run.length - 1
+      i = codeSpanEnd(line, i) - 1
     } else if (line.startsWith('{{', i)) {
       open += 1
       i += 1

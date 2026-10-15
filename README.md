@@ -72,8 +72,8 @@ never lose your place.
 - **Streaming stays clean.** While a reply streams, stretches already show as their short forms.
 - **Quieter tool calls.** A finished group of tool calls folds to Claude Code's own one-line summary
   (`Ran 3 shell commands ▸ show`). Running calls, and calls that errored, stay open.
-- **Nothing hides where clicks can't land.** On the classic renderer, and on other surfaces, every
-  stretch is drawn open.
+- **Nothing hides where clicks can't land.** On the classic renderer, and in apps other than the
+  terminal and the Claude desktop app, every stretch is drawn open.
 
 ## Limits
 
@@ -81,9 +81,12 @@ never lose your place.
   less; you don't pay less.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.
 - Built on Claude Code's function-hook plugin API, which is early access and changes between
-  releases. Checked on Claude Code 2.1.292 to 2.1.294.
+  releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294 and 2.1.300, and in
+  the Claude desktop app with 2.1.295. On Windows, clicks are reported not to work yet
+  ([#1](https://github.com/pro-vi/cc-stretch/issues/1)).
 - In the Claude desktop app the plugin's tool-call folding is not drawn; the app shows its own.
-  Desktop links checked on Claude Code 2.1.295.
+- A terminal session that also has the desktop app attached shows the markup while a reply streams,
+  because the desktop builds its links from it.
 
 ## Development
 

@@ -1,4 +1,4 @@
-import type { On } from 'claude-code'
+import type { On, RenderSurface } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -116,13 +116,30 @@ describe('streaming', () => {
     expect(hideLongForms('}} done.', { open: [{ isLong: true }], fence: undefined })).toBe(' done.')
   })
 
-  test('the display of a streaming reply never shows the markup in a terminal', async ($, on) => {
+  for (const surfaces of [['terminal'], ['terminal', 'mobile'], ['terminal', 'vscode']] satisfies RenderSurface[][]) {
+    test(`the display of a streaming reply never shows the markup with ${surfaces.join(' and ')} attached`, async ($, on) => {
+      on('classic.MessageDisplay', () => ({}))
+      on('session.surfaces', () => ({ value: surfaces }))
+      const flush = (index: number, delta: string, final = false) =>
+        $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
+      expect((await flush(0, 'A monad is {{a wrapper|a wrapper, like')).displayContent).toBe('A monad is a wrapper')
+      expect((await flush(1, 'Maybe or List,}} with two operations.', true)).displayContent).toBe(' with two operations.')
+    })
+  }
+
+  test('a message keeps the filter it started with when the desktop attaches or leaves midway', async ($, on) => {
+    let surfaces: RenderSurface[] = ['terminal']
     on('classic.MessageDisplay', () => ({}))
-    on('session.surfaces', () => ({ value: ['terminal'] }))
-    const flush = (index: number, delta: string, final = false) =>
-      $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
-    expect((await flush(0, 'A monad is {{a wrapper|a wrapper, like')).displayContent).toBe('A monad is a wrapper')
-    expect((await flush(1, 'Maybe or List,}} with two operations.', true)).displayContent).toBe(' with two operations.')
+    on('session.surfaces', () => ({ value: surfaces }))
+    const flush = (message: string, index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: message, index, final, delta })
+    expect((await flush('m1', 0, 'A monad is {{a wrapper|a wrapper, like')).displayContent).toBe('A monad is a wrapper')
+    surfaces = ['terminal', 'desktop']
+    expect((await flush('m1', 1, 'Maybe or List,}} with two operations.', true)).displayContent).toBe(' with two operations.')
+
+    expect((await flush('m2', 0, 'A monad is {{a wrapper|a wrapper, like')).displayContent).toBeUndefined()
+    surfaces = ['terminal']
+    expect((await flush('m2', 1, 'Maybe or List,}} with two operations.', true)).displayContent).toBeUndefined()
   })
 })
 
@@ -240,6 +257,12 @@ test('what the reader opened survives the reply being drawn again', async $ => {
   await again.unmount()
 })
 
+test('a short form written over several lines is drawn open in the terminal too', async $ => {
+  const ui = await mountReply($, FULLSCREEN, ['Two steps: {{- one', '- two|- one, first', '- two, second}}'].join('\n'))
+  expect(await textIn(ui)).toBe('Two steps: - one, first\n- two, second')
+  await ui.unmount()
+})
+
 test('on the main screen, every stretch is drawn open', async $ => {
   const ui = await mountReply($, MAIN_SCREEN)
   expect(await shown(ui)).toContain(', set in `ci/cache.ts`')
@@ -249,7 +272,9 @@ test('on the main screen, every stretch is drawn open', async $ => {
 })
 
 describe('desktop app', () => {
-  const linkTo = (action: 'open' | 'close', key: string) => `${HREF}${action}/${encodeURIComponent(key)}`
+  // A link names its stretch by its place among the reply's stretches.
+  const linkTo = (action: 'open' | 'close', key: string, text = REPLY) =>
+    `${HREF}${action}/${stretches(parse(text)).findIndex(stretch => stretch.key === key)}`
   const OUTER = 'on a stale cache'
   const INNER = `${OUTER} › , set in one file`
 
@@ -286,6 +311,49 @@ describe('desktop app', () => {
     await ui.unmount()
   })
 
+  test('a short form with brackets, a link, code or hundreds of characters still opens', async $ => {
+    const long = '缓存'.repeat(150)
+    const text = [
+      'Steps: {{1) install|1) install the plugin}}.',
+      'Cause: {{`arr[0]` is empty|`arr[0]` is empty when the list is}}.',
+      'Read {{the [guide](https://example.com/g)|the [guide](https://example.com/g), part two}}.',
+      `Note: {{${long}|${long}, and more}}.`,
+    ].join('\n\n')
+    const ui = await mountReply($, FULLSCREEN, text, 'desktop')
+    const drawn = await shown(ui)
+    expect(drawn).toContain(`[1) install](${linkTo('open', '1) install', text)})`)
+    expect(drawn).toContain(`[\`arr[0]\` is empty](${linkTo('open', '`arr[0]` is empty', text)})`)
+    expect(drawn).toContain(`[the guide (https://example.com/g)](${linkTo('open', 'the [guide](https://example.com/g)', text)})`)
+    for (const key of ['1) install', '`arr[0]` is empty', long]) {
+      await ui.press({ key: 'stretch', link: { href: linkTo('open', key, text) } })
+    }
+    expect(await shown(ui)).toContain('1) install the plugin [«]')
+    expect(await shown(ui)).toContain('`arr[0]` is empty when the list is [«]')
+    expect(await shown(ui)).toContain(`${long}, and more [«]`)
+    await ui.unmount()
+  })
+
+  test('a short form over several lines is neither opened nor unopened in the next note', async ($, on) => {
+    const text = ['Two steps: {{- one', '- two|- one, first', '- two, second}}', '', 'Then {{a stretch|a stretch, longer}}.'].join('\n')
+    on('session.messages', () => ({
+      value: [
+        { role: 'user', text: 'how?', toolUses: [] },
+        { role: 'assistant', text, toolUses: [] },
+      ],
+    }))
+    let context: readonly string[] | undefined
+    on('prompt.submit', ($, e) => {
+      context = e.context
+      return { text: e.text, context: e.context }
+    })
+
+    const ui = await mountReply($, FULLSCREEN, text, 'desktop')
+    await ui.press({ key: 'stretch', link: { href: linkTo('open', 'a stretch', text) } })
+    await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
+    expect(context).toEqual(['Stretchtext: since your last reply the reader opened "a stretch".'])
+    await ui.unmount()
+  })
+
   test('what the reader opened is told to the model with the next prompt', async ($, on) => {
     on('session.messages', () => ({
       value: [
@@ -308,12 +376,14 @@ describe('desktop app', () => {
     await ui.unmount()
   })
 
-  test('a reply streaming to the desktop app keeps its markup, which its links are made from', async ($, on) => {
-    on('classic.MessageDisplay', () => ({}))
-    on('session.surfaces', () => ({ value: ['desktop'] }))
-    const flush = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: true, delta: 'A monad is {{a wrapper|a wrapper.}}' })
-    expect(flush.displayContent).toBeUndefined()
-  })
+  for (const surfaces of [['desktop'], ['terminal', 'desktop']] satisfies RenderSurface[][]) {
+    test(`a reply streaming with ${surfaces.join(' and ')} attached keeps its markup, which the desktop's links are made from`, async ($, on) => {
+      on('classic.MessageDisplay', () => ({}))
+      on('session.surfaces', () => ({ value: surfaces }))
+      const flush = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: true, delta: 'A monad is {{a wrapper|a wrapper.}}' })
+      expect(flush.displayContent).toBeUndefined()
+    })
+  }
 })
 
 test('a reply without a stretch is drawn by the engine', async ($, on) => {
@@ -369,7 +439,7 @@ test('the next prompt tells the model which stretches were opened and which not'
 
   await $.prompt.submit({ text: 'and?', wait: false, origin: { kind: 'composer' } })
   expect(context).toEqual([
-    'Stretchtext: no click on a stretch of your last reply was recorded. Where clicks do not reach the plugin (the classic renderer, other apps), every stretch was drawn open.',
+    'Stretchtext: no click on a stretch of your last reply was recorded. The reader may have read only the short forms; where clicks do not reach the plugin (the classic renderer, apps other than the terminal and the Claude desktop app), every stretch was drawn open.',
   ])
   await ui.unmount()
 })

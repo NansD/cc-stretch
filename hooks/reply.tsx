@@ -3,7 +3,7 @@ import type { ClientModule, ClientSurface, TextProps } from 'claude-code'
 import { grow, lengthOf } from './grow'
 import { layout, link, linkAt } from './layout'
 import type { Row, Run } from './layout'
-import { KEY_SEPARATOR, parse, stretches } from './parse'
+import { isLinkable, KEY_SEPARATOR, parse, stretches } from './parse'
 import type { Segment, Stretch } from './parse'
 
 // Draws one paragraph of a reply that holds stretches. It runs where the reader's screen draws it,
@@ -54,6 +54,8 @@ function compose(segments: Segment[], state: State): string {
   const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
   const draw = (stretch: Stretch): string => {
     if (stretch.long === undefined || !stretch.isClosed) return stretch.short
+    // A short form over several lines is drawn open, or as written when its long form is empty.
+    if (!isLinkable(stretch)) return stretch.long.length === 0 ? stretch.short : write(stretch.long)
     if (state.growth?.key === stretch.key) return grow(stretch.short, stretch.long, easeInOut(state.growth.progress), draw)
     if (!state.open.includes(stretch.key)) return link('open', stretch.key, stretch.short)
     return `${write(stretch.long)} ${link('close', stretch.key, '«')}`

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0 — 2026-10-15
+
+- In the terminal, the words a stretch adds are drawn in a colour of their own, a different one for
+  each stretch you open. The one you opened last is brightest; the others fade a little, and all of
+  them fade once you write your next prompt. Each `«` keeps its stretch's bright colour.
+- Closed stretches are underlined in the text's own colour, no longer blue, so colour marks only what
+  you opened.
+- A `«` after a rule or a code block goes on a line of its own, in the terminal and in the desktop
+  app. Before, it turned the rule into plain dashes or left the code block unclosed.
+
 ## 0.2.0 — 2026-10-14
 
 - Clickable stretches in the Claude desktop app: each stretch is a link that opens in place, and `«`

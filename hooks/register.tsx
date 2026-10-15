@@ -1,5 +1,5 @@
 import { atom, memberOf, read, update } from 'claude-code'
-import type { Register, RenderInput, SessionMessage } from 'claude-code'
+import type { EngineInterface, Register, RenderInput, SessionMessage } from 'claude-code'
 
 import { GUIDE } from './guide'
 import { closeAfter, codeSpanEnd, hideLongForms, isLinkable, isOpenable, KEY_SEPARATOR, paragraphsOf, parentOf, parse, stretches } from './parse'
@@ -39,25 +39,72 @@ const HUES = BASE.dark.length
 // so it points at a reserved name that resolves nowhere.
 const HREF = 'https://cc-stretch.invalid/'
 
+/** A streaming reply's filter state, with what it held and what it was shown as so far. */
+type Stream = { state: StreamState; raw: string; shown: string }
+/** How many filtered replies are kept by what they were shown as. */
+const KEPT_REPLIES = 200
+/** How many of the session's latest replies with a stretch are searched for one not kept. */
+const SEARCHED_REPLIES = 50
+
+/** A reply's text with its whitespace gone, as the site may break and trim its lines. */
+const keyOf = (text: string) => text.replace(/\s+/g, '')
+
+// Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the reply as the streaming filter
+// left it, with its long forms gone. Each filtered reply is kept by what it was shown as, so the
+// site can draw it from its markup again; null for one that held no stretch. A reply filtered
+// before the plugin last loaded is found among the session's messages instead.
+const unfiltered = new Map<string, string | null>()
+
+function remember({ raw, shown }: Stream): void {
+  unfiltered.delete(keyOf(shown))
+  unfiltered.set(keyOf(shown), raw === shown ? null : raw)
+  for (const key of unfiltered.keys()) {
+    if (unfiltered.size <= KEPT_REPLIES) break
+    unfiltered.delete(key)
+  }
+}
+
+/** The text a reply was written with, markup and all, when `text` is how the filter showed it. */
+async function rawOf($: EngineInterface, text: string): Promise<string | undefined> {
+  const key = keyOf(text)
+  const kept = unfiltered.get(key)
+  if (kept !== undefined) return kept ?? undefined
+  const messages = await $.session.messages().catch(() => [])
+  const replies = messages.filter(message => message.role === 'assistant' && message.text.includes('{{')).slice(-SEARCHED_REPLIES)
+  return replies.find(message => keyOf(hideLongForms(message.text, { open: [], fence: undefined })) === key)?.text
+}
 
 export const register: Register = on => {
   // While a reply streams, Claude Code draws its lines as they arrive, before the reply reaches
   // the AssistantMessage site below. Showing each stretch as its short form there too keeps the
   // raw markup from flashing past. One filter state per message, until its final flush; null for a
   // message left as written.
-  const streams = new Map<string, StreamState | null>()
+  const streams = new Map<string, Stream | null>()
   on('classic.MessageDisplay', async ($, e, next) => {
     const answer = await next(e)
     // The desktop app draws a finished reply from this display text, so hiding the long forms here
     // would strip the markup its links are made from. Decided on a message's first flush, so a
     // surface that attaches or leaves midway cannot half-filter it.
-    let state = streams.get(e.message_id)
-    if (state === undefined) state = (await $.session.surfaces()).includes('desktop') ? null : { open: [], fence: undefined }
-    if (e.final) streams.delete(e.message_id)
-    else streams.set(e.message_id, state)
-    if (state === null) return answer
+    let stream = streams.get(e.message_id)
+    if (stream === undefined) stream = (await $.session.surfaces()).includes('desktop') ? null : { state: { open: [], fence: undefined }, raw: '', shown: '' }
+    if (stream === null) {
+      if (e.final) streams.delete(e.message_id)
+      else streams.set(e.message_id, stream)
+      return answer
+    }
 
-    return { ...answer, displayContent: hideLongForms(answer.displayContent ?? e.delta, state) }
+    const delta = answer.displayContent ?? e.delta
+    const displayContent = hideLongForms(delta, stream.state)
+    stream.raw += delta
+    stream.shown += displayContent
+    if (e.final) {
+      streams.delete(e.message_id)
+      remember(stream)
+    } else {
+      streams.set(e.message_id, stream)
+    }
+
+    return { ...answer, displayContent }
   })
 
   on('prompt.compose', async ($, e, next) => {
@@ -132,11 +179,21 @@ export const register: Register = on => {
   // plugin loaded. A render hook cannot write plugin state, so it is kept here.
   let notedRequest: string | undefined
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
+    if (e.props.isSummary === true) return next(e)
     // A stretch still streaming has no closing braces yet; drawing it here keeps the raw markup
     // off the screen until it closes and becomes pressable.
-    const parts = parse(e.props.text)
-    const all = stretches(parts)
-    if (e.props.isSummary === true || all.length === 0) return next(e)
+    let text = e.props.text
+    let parts = parse(text)
+    let all = stretches(parts)
+    // Text without a stretch may be a reply the streaming filter already drew short.
+    if (all.length === 0) {
+      const raw = text.trim() === '' ? undefined : await rawOf($, text)
+      if (raw === undefined) return next(e)
+      text = raw
+      parts = parse(text)
+      all = stretches(parts)
+      if (all.length === 0) return next(e)
+    }
 
     // The desktop app draws markdown links and hands a press on one to the plugin: the whole block is
     // one Markdown whose closed stretches are links that open in place, each open one ending in a «.
@@ -176,7 +233,7 @@ export const register: Register = on => {
         (await $.config.list().catch(() => [])).some(row => row.key === 'theme' && String(row.value).startsWith('light'))
       const palette = isLight ? PALETTES.light : PALETTES.dark
       const parts = await Promise.all(
-        paragraphsOf(e.props.text).map(async (paragraph, i) => {
+        paragraphsOf(text).map(async (paragraph, i) => {
           if (!paragraph.hasStretch) return <Markdown text={paragraph.text} />
           const key = `paragraph-${i}`
           const open = await read($, memberOf(openStretches, { requestId: `${e.requestId}#${key}` }))

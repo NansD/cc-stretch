@@ -144,6 +144,53 @@ describe('streaming', () => {
     surfaces = ['terminal']
     expect((await flush('m2', 1, 'Maybe or List,}} with two operations.', true)).displayContent).toBeUndefined()
   })
+
+  // Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the display text the filter left.
+  test('a reply the filter drew short is drawn from its markup, pressable', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    let shownText = ''
+    for (const [index, delta] of ['A monad is {{a wrapper|a wrapper, like\n', 'Maybe or List,}} with two operations.\n', ''].entries()) {
+      const flush = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final: index === 2, delta })
+      shownText += flush.displayContent ?? ''
+    }
+    expect(shownText).toBe('A monad is a wrapper\n with two operations.\n')
+
+    const ui = await mountReply($, FULLSCREEN, shownText.trim())
+    const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+    expect(pieces.find(piece => piece.text === 'a wrapper')?.props).toMatchObject({ underline: true })
+    await pressOn(ui, 'a wrapper')
+    await ui.advance(2000)
+    expect(await textIn(ui)).toContain('Maybe or List, «')
+    await ui.unmount()
+  })
+
+  test('a reply filtered before the plugin loaded is found among the session\'s messages', async ($, on) => {
+    on('session.messages', () => ({ value: [{ role: 'assistant', text: REPLY, toolUses: [] }] }))
+    const ui = await mountReply($, FULLSCREEN, hideLongForms(REPLY, { open: [], fence: undefined }))
+    expect(await textIn(ui)).toBe('The build fails on a stale cache.\nBraces in code stay: {{a|b}}.')
+    expect(await textIn(ui, 'paragraph-1')).toBe('The fix is one line.')
+    await ui.unmount()
+  })
+
+  test('a filtered reply that held no stretch is drawn by the engine, without a search', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    let searches = 0
+    on('session.messages', () => {
+      searches++
+      return { value: [] }
+    })
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: true, delta: 'Plain answer.' })
+    const ui = await mountReply($, FULLSCREEN, 'Plain answer.')
+    expect(await ui.find({ text: 'engine' })).toBeDefined()
+    expect(searches).toBe(0)
+    await ui.unmount()
+  })
 })
 
 describe('parse', () => {

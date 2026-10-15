@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.2 — 2026-10-15
+
+- Claude is told that each short form must say something itself, the gist of its long form. A label
+  for the long form, such as "Details." or "What changed.", is not a short form.
+- The README gathers where clicks don't work, and why, under Limits.
+
 ## 0.3.1 — 2026-10-15
 
 - On Claude Code's main screen, where a printed reply cannot change and so every stretch shows open,

@@ -29,6 +29,20 @@ const END = '\ue002'
 const TINT = '\ue003'
 const TINT_END = '\ue004'
 
+// A mark drawn on the letter before it, or a character no terminal draws, takes no cell.
+const ZERO_WIDTH = /[\p{Mn}\p{Me}\p{Default_Ignorable_Code_Point}]/u
+
+// Where a row may break in text without spaces. Chinese and Japanese break between any two
+// characters. Korean spaces its words, so it breaks at spaces as Latin text does. Thai, Lao, Khmer
+// and Burmese write words without spaces, and a row breaks between words where Intl.Segmenter
+// finds them. Closing punctuation, a Japanese small kana, the long-vowel mark and a mark drawn on
+// the letter before it never start a row; opening punctuation never ends one.
+const UNSPACED = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Bopomofo}\u3000-\u303f\uff00-\uffef]/u
+const SEGMENTED = /[\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}]/u
+const NO_START = /[\p{Pe}\p{Pf},.:;!?，。、；：？！…·ぁぃぅぇぉっゃゅょゎゕゖァィゥェォッャュョヮヵヶーゝゞヽヾ々]/u
+const NO_END = /[\p{Ps}\p{Pi}]/u
+const SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' })
+
 /** A line's text without its tint marks, and the tint of each character left. */
 type Line = { text: string; tints: (string | undefined)[] }
 
@@ -88,16 +102,26 @@ export function linkAt(rows: Row[], x: number, y: number): Run['link'] {
   return spans.find(span => span.link?.action === 'close' && x >= span.from - 1 && x < span.to + 1)?.link
 }
 
-/** Cells a string takes: two for wide East Asian characters and most emoji, else one. */
+/**
+ * Cells a string takes: none for a mark drawn on the letter before it (a Thai vowel written above or
+ * below a letter, a tone mark, an accent) or a character no terminal draws, such as a joiner; two for
+ * wide East Asian characters and most emoji; else one.
+ */
 export function widthOf(text: string): number {
   let cells = 0
   for (const ch of text) {
     const c = ch.codePointAt(0) ?? 0
+    // Every character below U+0300 takes one cell, so most English text skips the tests below. That
+    // includes the soft hyphen (U+00AD), which ZERO_WIDTH would count as none.
+    if (c < 0x300) {
+      cells += 1
+      continue
+    }
     const isWide =
       (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
       (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) ||
       (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1f64f) || (c >= 0x1f900 && c <= 0x1f9ff)
-    cells += isWide ? 2 : 1
+    cells += ZERO_WIDTH.test(ch) ? 0 : isWide ? 2 : 1
   }
 
   return cells
@@ -221,7 +245,10 @@ function inline(text: string, tints: Line['tints'], isBold = false): Run[] {
   return runs
 }
 
-/** Word-wraps runs into rows of `width` cells; the first row starts with `first`, later rows with `rest`. */
+/**
+ * Wraps runs into rows of `width` cells, breaking at spaces and, in text without them, where
+ * `breakables` allows; the first row starts with `first`, later rows with `rest`.
+ */
 function wrap(runs: Run[], width: number, first: string, rest: string, isDimLead = false): Row[] {
   const rows: Row[] = []
   let row: Row = []
@@ -251,7 +278,7 @@ function wrap(runs: Run[], width: number, first: string, rest: string, isDimLead
 
   begin(first)
   for (const run of runs) {
-    for (const text of run.text.split(/( +)/)) {
+    for (const text of run.text.split(/( +)/).flatMap(breakables)) {
       if (text === '') continue
       if (text.trim() === '') {
         if (isBare) continue
@@ -280,6 +307,35 @@ function wrap(runs: Run[], width: number, first: string, rest: string, isDimLead
   rows.push(row)
 
   return rows
+}
+
+/** One part of a line split at spaces, cut into the pieces a row may break between; a run of spaces stays whole. */
+function breakables(text: string): string[] {
+  // Nothing below Thai breaks, so a Latin word or a run of spaces comes back whole without a look at
+  // each character.
+  if (!/[^\0-\u0dff]/.test(text)) return [text]
+  const wordStarts = new Set<number>()
+  if (SEGMENTED.test(text)) for (const word of SEGMENTER.segment(text)) wordStarts.add(word.index)
+  const pieces: string[] = []
+  let piece = ''
+  let last = ''
+  let isAfterUnspaced = false
+  let at = 0
+  for (const ch of text) {
+    const isUnspaced = UNSPACED.test(ch)
+    const isWordStart = wordStarts.has(at) && SEGMENTED.test(last + ch)
+    if (piece !== '' && (isUnspaced || isAfterUnspaced || isWordStart) && !NO_START.test(ch) && !NO_END.test(last) && !ZERO_WIDTH.test(ch)) {
+      pieces.push(piece)
+      piece = ''
+    }
+    piece += ch
+    last = ch
+    isAfterUnspaced = isUnspaced || (isAfterUnspaced && NO_START.test(ch))
+    at += ch.length
+  }
+  if (piece !== '') pieces.push(piece)
+
+  return pieces
 }
 
 /** Rows of text kept as written, cut every `width` cells. */

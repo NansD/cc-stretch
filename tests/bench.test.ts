@@ -5,6 +5,10 @@ import { growthOf } from '../hooks/grow.ts'
 import { parse } from '../hooks/parse.ts'
 import { verdictsOf } from '../bench/rules.ts'
 import type { RuleId } from '../bench/rules.ts'
+import { readChecks, readKey, readLabels, readPoints, resultOf } from '../bench/grading.ts'
+import { differences, readManifest, rowsOf } from '../bench/manifest.ts'
+import type { Manifest } from '../bench/manifest.ts'
+import { readTask, TASKS } from '../bench/tasks.ts'
 import type { Layout } from '../bench/tasks.ts'
 
 const REPLY = 'The build {{fails|fails on {{a stale cache|a cache keyed only by the lockfile}}}}. Fix `{{x|y}}` first.'
@@ -108,5 +112,54 @@ describe('layout rules', () => {
 
   test('a rule a task does not ask for is not checked', async () => {
     expect(verdictsOf('git log', {}).map(v => v.rule)).toEqual(['keeps-short-words', 'inline-short', 'adds-words', 'not-in-heading-or-table'])
+  })
+})
+
+describe('run manifests and judge answers', () => {
+  const MANIFEST: Manifest = {
+    command: 'tasks', repeats: 1, writer: 'opus', judge: 'haiku', effort: 'default',
+    arms: { a: 'aaa', b: 'bbb' }, tasks: TASKS.slice(0, 2), claude: '2.1.301 (Claude Code)', revision: { commit: 'c1', isDirty: false },
+  }
+
+  test('a manifest differs from another only where an input changed, never by its revision', async () => {
+    expect(differences(MANIFEST, { ...MANIFEST, revision: { commit: 'c2', isDirty: true } })).toEqual([])
+    expect(differences(MANIFEST, { ...MANIFEST, arms: { a: 'aaa', b: 'changed' }, judge: 'sonnet', claude: '2.1.302 (Claude Code)' })).toEqual(['arms.b', 'claude', 'judge'])
+    const [first, second] = TASKS
+    if (first === undefined || second === undefined) throw new Error('needs two tasks')
+    expect(differences(MANIFEST, { ...MANIFEST, tasks: [{ ...first, key: { ...first.key, never: ['a new claim'] } }, second] })).toEqual([`tasks.${first.id}`])
+    expect(differences(MANIFEST, { ...MANIFEST, repeats: 2 })).toEqual(['repeats'])
+  })
+
+  test('a manifest and its tasks read back whole, and a malformed one is refused', async () => {
+    expect(readManifest(JSON.stringify(MANIFEST))).toEqual(MANIFEST)
+    for (const task of TASKS) expect(readTask(JSON.parse(JSON.stringify(task)))).toEqual(task)
+    expect(() => readManifest('{"command":"tasks"}')).toThrow('not a guide bench manifest')
+    expect(() => readTask({ id: 'x', question: 'q', evidence: 'e', key: { know: [], defer: [], never: [1] } })).toThrow()
+  })
+
+  test('a judge answer is read strictly: wrong words or counts throw', async () => {
+    expect(readKey('```json\n{"know":["yes","partly"],"never":["no"]}\n```', 2, 1)).toEqual({ know: ['yes', 'partly'], never: ['no'] })
+    expect(() => readKey('{"know":["yes","maybe"],"never":["no"]}', 2, 1)).toThrow('"maybe"')
+    expect(() => readKey('{"know":["yes"],"never":["no"]}', 2, 1)).toThrow('not 2')
+    expect(() => readKey('{"know":["yes","no","no"],"never":["no"]}', 2, 1)).toThrow('not 2')
+    expect(() => readKey('{"know":["yes","no"],"never":["partly"]}', 2, 1)).toThrow('"partly"')
+    expect(readLabels('{"verdicts":{"1":"gist","2":"label"}}', 2)).toEqual(['gist', 'label'])
+    expect(() => readLabels('{"verdicts":{"1":"gist"}}', 2)).toThrow('exactly 2')
+    expect(() => readLabels('{"verdicts":{"1":"gist","3":"label"}}', 2)).toThrow('phrase 2')
+    expect(() => readPoints('{"points":[]}')).toThrow()
+    expect(() => readChecks('no json here', 1)).toThrow('no JSON object')
+  })
+
+  test("Claude Code's answer is read with the models that wrote it", async () => {
+    const events = (result: object) => JSON.stringify([{ type: 'system', model: 'claude-opus-5-5' }, { type: 'result', ...result }])
+    expect(resultOf(events({ is_error: false, result: ' hi ', modelUsage: { 'claude-opus-5-5': {}, 'claude-haiku-5-5': {} } }))).toEqual({ text: 'hi', models: ['claude-haiku-5-5', 'claude-opus-5-5'] })
+    expect(() => resultOf(events({ is_error: true, result: 'API Error: overloaded\nmore' }))).toThrow('API Error: overloaded')
+    expect(() => resultOf(JSON.stringify([{ type: 'result', is_error: false, result: 'hi' }]))).toThrow('named no model')
+  })
+
+  test('a run file skips a last line cut short, and refuses a malformed one elsewhere', async () => {
+    expect(rowsOf('{"a":1}\n{"a":2}\n{"a":')).toEqual({ rows: [{ a: 1 }, { a: 2 }], isCut: true })
+    expect(rowsOf('{"a":1}\n')).toEqual({ rows: [{ a: 1 }], isCut: false })
+    expect(() => rowsOf('{"a":1}\n{"a":\n{"a":3}\n')).toThrow('line 2')
   })
 })

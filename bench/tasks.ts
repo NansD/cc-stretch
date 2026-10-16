@@ -24,6 +24,32 @@ export type Task = {
 /** The fields of a task the layout rules read. */
 export type Layout = Pick<Task, 'items' | 'needsNoStretch' | 'closing'>
 
+/** A task read back from a run's manifest, or an error naming the field that is wrong. */
+export function readTask(value: unknown): Task {
+  const get = (from: unknown, key: string): unknown => (typeof from === 'object' && from !== null ? Reflect.get(from, key) : undefined)
+  const strings = (from: unknown): string[] | undefined => (Array.isArray(from) && from.every(s => typeof s === 'string') ? from : undefined)
+  const id = get(value, 'id'), question = get(value, 'question'), evidence = get(value, 'evidence'), key = get(value, 'key')
+  const know = strings(get(key, 'know')), defer = strings(get(key, 'defer')), never = strings(get(key, 'never'))
+  const items = get(value, 'items'), needsNoStretch = get(value, 'needsNoStretch'), closing = get(value, 'closing')
+  const itemList = Array.isArray(items) ? items.map(strings) : undefined
+  if (typeof id !== 'string' || typeof question !== 'string' || typeof evidence !== 'string' || know === undefined || defer === undefined || never === undefined) {
+    throw new Error(`task ${JSON.stringify(id)} has no question, evidence or key`)
+  }
+  if ((items !== undefined && (itemList === undefined || itemList.some(item => item === undefined))) || (needsNoStretch !== undefined && needsNoStretch !== true) || (closing !== undefined && typeof closing !== 'string')) {
+    throw new Error(`task ${id} has a malformed items, needsNoStretch or closing`)
+  }
+
+  return {
+    id,
+    question,
+    evidence,
+    key: { know, defer, never },
+    ...(itemList !== undefined && { items: itemList.flatMap(item => (item === undefined ? [] : [item])) }),
+    ...(needsNoStretch === true && { needsNoStretch }),
+    ...(typeof closing === 'string' && { closing }),
+  }
+}
+
 export const TASKS: Task[] = [
   {
     id: 'brief',

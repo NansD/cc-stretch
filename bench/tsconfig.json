@@ -5,5 +5,5 @@
     "allowImportingTsExtensions": true, "noEmit": true,
     "strict": true, "noUncheckedIndexedAccess": true, "skipLibCheck": true
   },
-  "include": ["*.ts"]
+  "include": ["*.ts", "stub/*.ts"]
 }

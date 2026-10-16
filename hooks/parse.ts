@@ -40,7 +40,8 @@ export function isLinkable(stretch: Stretch): boolean {
 export function closeAfter(long: string, closer: string, gap: string): string {
   const trimmed = long.trimEnd()
   const last = trimmed.slice(trimmed.lastIndexOf('\n') + 1)
-  const endsInBlock = isRule(last) || /^ {0,3}(?:`{3,}|~{3,})[ \t]*$/.test(last)
+  const fence = openingFence(last)
+  const endsInBlock = isRule(last) || (fence !== undefined && closesFence(last, fence))
 
   return endsInBlock ? `${trimmed}${gap}${closer}` : `${long} ${closer}`
 }
@@ -55,11 +56,15 @@ export function parentOf(key: string): string {
   return key.split(KEY_SEPARATOR).slice(0, -1).join(KEY_SEPARATOR)
 }
 
-/** Where the code span opening at `i` ends: past the next run of as many backticks, or at the text's end. */
-export function codeSpanEnd(text: string, i: number): number {
-  const run = /^`+/.exec(text.slice(i))?.[0] ?? '`'
-  const end = text.indexOf(run, i + run.length)
-  return end === -1 ? text.length : end + run.length
+/**
+ * The code span at `i`: where it stops, past the next run of as many backticks or at the text's end,
+ * and its backticks when it is still open there. `open` carries the backticks of a span opened on an
+ * earlier line, whose close is then looked for from `i` on.
+ */
+export function codeSpan(text: string, i: number, open?: string): { stop: number; open: string | undefined } {
+  const run = open ?? /^`+/.exec(text.slice(i))?.[0] ?? '`'
+  const end = text.indexOf(run, open === undefined ? i + run.length : i)
+  return end === -1 ? { stop: text.length, open: run } : { stop: end + run.length, open: undefined }
 }
 
 export function parse(text: string): Segment[] {
@@ -92,7 +97,7 @@ export function parse(text: string): Segment[] {
     }
 
     if (text[i] === '`') {
-      const stop = codeSpanEnd(text, i)
+      const { stop } = codeSpan(text, i)
       write(text.slice(i, stop))
       i = stop
       continue
@@ -148,15 +153,25 @@ function fenceEnd(text: string, start: number): number | undefined {
     const end = text.indexOf('\n', from)
     return end === -1 ? text.length : end
   }
-  const opening = /^[ \t]*(`{3,}|~{3,})/.exec(text.slice(start, lineEnd(start)))?.[1]
+  const opening = openingFence(text.slice(start, lineEnd(start)))
   if (opening === undefined) return undefined
 
   for (let at = lineEnd(start) + 1; at < text.length; at = lineEnd(at) + 1) {
-    const line = text.slice(at, lineEnd(at)).trim()
-    if (line.length >= opening.length && [...line].every(c => c === opening[0])) return Math.min(lineEnd(at) + 1, text.length)
+    if (closesFence(text.slice(at, lineEnd(at)), opening)) return Math.min(lineEnd(at) + 1, text.length)
   }
 
   return text.length
+}
+
+/** The marker `line` opens a code fence with, such as ``` or ~~~, or undefined when it opens none. */
+export function openingFence(line: string): string | undefined {
+  return /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1]
+}
+
+/** Whether `line` closes the code fence `fence` opened: trimmed, it is only the fence's character, repeated at least as often. */
+export function closesFence(line: string, fence: string): boolean {
+  const trimmed = line.trim()
+  return trimmed.startsWith(fence) && trimmed === fence.charAt(0).repeat(trimmed.length)
 }
 
 /** Every stretch, outermost first, in the order the reply writes them. */
@@ -166,34 +181,41 @@ export function stretches(segments: Segment[]): Stretch[] {
   )
 }
 
-/** Where a streaming filter stands between flushes: open stretches and an open code fence. */
-export type StreamState = { open: { isLong: boolean }[]; fence: string | undefined }
+/**
+ * Where a streaming filter stands between flushes: open stretches, an open code fence, and the
+ * backticks of a code span still open, since `parse` lets a span run over line breaks.
+ */
+export type StreamState = { open: { isLong: boolean }[]; fence: string | undefined; span: string | undefined }
+
+/** A streaming filter's state before a reply's first flush. */
+export const newStreamState = (): StreamState => ({ open: [], fence: undefined, span: undefined })
 
 /**
  * A streaming reply's newly finished lines with each stretch shown as its short form, as the
- * finished reply will first show it. `state` carries open stretches and fences from one flush to
- * the next. A line that held only long-form text is left out, so the stream does not grow blank
- * lines where hidden depth goes.
+ * finished reply will first show it. `state` carries open stretches, fences and code spans from one
+ * flush to the next. A line that held only long-form text is left out, so the stream does not grow
+ * blank lines where hidden depth goes.
  */
 export function hideLongForms(lines: string, state: StreamState): string {
   return lines
     .split('\n')
     .flatMap(line => {
-      const fence = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1]
+      const fence = state.fence === undefined && state.span === undefined ? openingFence(line) : undefined
       if (state.fence !== undefined || fence !== undefined) {
         const isShown = state.open.length === 0 || (state.open.length === 1 && state.open[0]?.isLong === false)
         if (state.fence === undefined) state.fence = fence
-        else if (fence !== undefined && fence[0] === state.fence[0] && fence.length >= state.fence.length) state.fence = undefined
+        else if (closesFence(line, state.fence)) state.fence = undefined
         return isShown ? [line] : []
       }
       let out = ''
       for (let i = 0; i < line.length; i++) {
         const top = state.open.at(-1)
         const isShown = state.open.length === 0 || (state.open.length === 1 && top?.isLong === false)
-        if (line[i] === '`') {
-          const stop = codeSpanEnd(line, i)
-          if (isShown) out += line.slice(i, stop)
-          i = stop - 1
+        if (state.span !== undefined || line[i] === '`') {
+          const span = codeSpan(line, i, state.span)
+          state.span = span.open
+          if (isShown) out += line.slice(i, span.stop)
+          i = span.stop - 1
         } else if (line.startsWith('{{', i) && top?.isLong !== false) {
           state.open.push({ isLong: false })
           i++
@@ -215,33 +237,34 @@ export function hideLongForms(lines: string, state: StreamState): string {
 export type Paragraph = { text: string; hasStretch: boolean }
 
 /**
- * The reply cut at the blank lines that stand outside every stretch and code fence, so a paragraph
- * holding a stretch can be drawn apart from the rest. Neighbouring paragraphs without one are kept
- * together.
+ * The reply cut at the blank lines that stand outside every stretch, code fence and code span, so a
+ * paragraph holding a stretch can be drawn apart from the rest. Neighbouring paragraphs without one
+ * are kept together.
  */
 export function paragraphsOf(text: string): Paragraph[] {
   const pieces: string[] = []
   let current: string[] = []
   let depth = 0
+  let span: string | undefined
   let fence: string | undefined
   for (const line of text.split('\n')) {
-    const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line)?.[1]
     if (fence !== undefined) {
-      if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined
+      if (closesFence(line, fence)) fence = undefined
       current.push(line)
       continue
     }
+    const marker = span === undefined ? openingFence(line) : undefined
     if (marker !== undefined) {
       fence = marker
       current.push(line)
       continue
     }
-    if (line.trim() === '' && depth === 0) {
+    if (line.trim() === '' && depth === 0 && span === undefined) {
       if (current.length > 0) pieces.push(current.join('\n'))
       current = []
       continue
     }
-    depth = depthAfter(line, depth)
+    ;({ depth, span } = depthAfter(line, depth, span))
     current.push(line)
   }
   if (current.length > 0) pieces.push(current.join('\n'))
@@ -257,12 +280,18 @@ export function paragraphsOf(text: string): Paragraph[] {
   return paragraphs
 }
 
-/** How many stretches stand open after `line`, given `depth` open before it; code spans are skipped. */
-function depthAfter(line: string, depth: number): number {
+/**
+ * How many stretches stand open after `line`, and the backticks of a code span still open, given
+ * `depth` and `span` as they stood before it. Braces in a code span are skipped.
+ */
+function depthAfter(line: string, depth: number, span: string | undefined): { depth: number; span: string | undefined } {
   let open = depth
+  let code = span
   for (let i = 0; i < line.length; i++) {
-    if (line[i] === '`') {
-      i = codeSpanEnd(line, i) - 1
+    if (code !== undefined || line[i] === '`') {
+      const at = codeSpan(line, i, code)
+      code = at.open
+      i = at.stop - 1
     } else if (line.startsWith('{{', i)) {
       open += 1
       i += 1
@@ -272,5 +301,5 @@ function depthAfter(line: string, depth: number): number {
     }
   }
 
-  return open
+  return { depth: open, span: code }
 }

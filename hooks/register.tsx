@@ -2,7 +2,7 @@ import { atom, memberOf, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderInput, SessionMessage } from 'claude-code'
 
 import { GUIDE } from './guide'
-import { closeAfter, codeSpanEnd, hideLongForms, isLinkable, isOpenable, KEY_SEPARATOR, paragraphsOf, parentOf, parse, stretches } from './parse'
+import { closeAfter, codeSpan, hideLongForms, isLinkable, isOpenable, KEY_SEPARATOR, newStreamState, paragraphsOf, parentOf, parse, stretches } from './parse'
 import type { Segment, StreamState, Stretch } from './parse'
 import type { ReplyPost, ReplyProps, Tint } from './reply'
 
@@ -70,7 +70,7 @@ async function rawOf($: EngineInterface, text: string): Promise<string | undefin
   if (kept !== undefined) return kept ?? undefined
   const messages = await $.session.messages().catch(() => [])
   const replies = messages.filter(message => message.role === 'assistant' && message.text.includes('{{')).slice(-SEARCHED_REPLIES)
-  return replies.find(message => keyOf(hideLongForms(message.text, { open: [], fence: undefined })) === key)?.text
+  return replies.find(message => keyOf(hideLongForms(message.text, newStreamState())) === key)?.text
 }
 
 export const register: Register = on => {
@@ -85,7 +85,7 @@ export const register: Register = on => {
     // would strip the markup its links are made from. Decided on a message's first flush, so a
     // surface that attaches or leaves midway cannot half-filter it.
     let stream = streams.get(e.message_id)
-    if (stream === undefined) stream = (await $.session.surfaces()).includes('desktop') ? null : { state: { open: [], fence: undefined }, raw: '', shown: '' }
+    if (stream === undefined) stream = (await $.session.surfaces()).includes('desktop') ? null : { state: newStreamState(), raw: '', shown: '' }
     if (stream === null) {
       if (e.final) streams.delete(e.message_id)
       else streams.set(e.message_id, stream)
@@ -308,7 +308,7 @@ function labelOf(short: string): string {
   let label = ''
   let from = 0
   for (let at = short.indexOf('`'); at !== -1; at = short.indexOf('`', from)) {
-    const stop = codeSpanEnd(short, at)
+    const { stop } = codeSpan(short, at)
     label += plain(short.slice(from, at)) + short.slice(at, stop)
     from = stop
   }

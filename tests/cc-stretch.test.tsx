@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 import { grow } from '../hooks/grow'
 import { layout, link, linkAt, tint, widthOf } from '../hooks/layout'
-import { hideLongForms, paragraphsOf, parse, stretches } from '../hooks/parse'
+import { closeAfter, hideLongForms, newStreamState, paragraphsOf, parse, stretches } from '../hooks/parse'
 
 const REPLY = [
   'The build fails {{on a stale cache|because the cache key hashes only `package.json`{{, set in one file|, set in `ci/cache.ts`}}}}.',
@@ -113,10 +113,22 @@ describe('grow', () => {
 
 describe('streaming', () => {
   test('shows each stretch as its short form, across flushes, and drops lines of hidden depth', async () => {
-    const state = { open: [], fence: undefined }
+    const state = newStreamState()
     expect(hideLongForms('The build fails {{on a stale cache|because the cache key', state)).toBe('The build fails on a stale cache')
     expect(hideLongForms('hashes only `package.json`.\nStill hidden.\n}}, written {{x|y}} there.\n\nNext `{{a|b}}` line.', state)).toBe(', written x there.\n\nNext `{{a|b}}` line.')
-    expect(hideLongForms('}} done.', { open: [{ isLong: true }], fence: undefined })).toBe(' done.')
+    expect(hideLongForms('}} done.', { open: [{ isLong: true }], fence: undefined, span: undefined })).toBe(' done.')
+  })
+
+  test('a code span over several lines is copied as written, and a stretch after it shows short', async () => {
+    const state = newStreamState()
+    expect(hideLongForms('Use `the', state)).toBe('Use `the')
+    expect(hideLongForms('value` then {{tip|a tip}}.', state)).toBe('value` then tip.')
+    expect(hideLongForms('Use `the\n{{a|b}} value` ok.', newStreamState())).toBe('Use `the\n{{a|b}} value` ok.')
+  })
+
+  test('a line starting with a fence marker and more text does not close the block, so braces after it stay as written', async () => {
+    const state = newStreamState()
+    expect(hideLongForms(['```', '```python', '{{a|b}}', '```', '{{c|d}}'].join('\n'), state)).toBe(['```', '```python', '{{a|b}}', '```', 'c'].join('\n'))
   })
 
   for (const surfaces of [['terminal'], ['terminal', 'mobile'], ['terminal', 'vscode']] satisfies RenderSurface[][]) {
@@ -167,7 +179,7 @@ describe('streaming', () => {
 
   test('a reply filtered before the plugin loaded is found among the session\'s messages', async ($, on) => {
     on('session.messages', () => ({ value: [{ role: 'assistant', text: REPLY, toolUses: [] }] }))
-    const ui = await mountReply($, FULLSCREEN, hideLongForms(REPLY, { open: [], fence: undefined }))
+    const ui = await mountReply($, FULLSCREEN, hideLongForms(REPLY, newStreamState()))
     expect(await textIn(ui)).toBe('The build fails on a stale cache.\nBraces in code stay: {{a|b}}.')
     expect(await textIn(ui, 'paragraph-1')).toBe('The fix is one line.')
     await ui.unmount()
@@ -254,6 +266,31 @@ describe('layout', () => {
     expect(widthOf('漢字ab')).toBe(6)
     expect(layout('漢字漢字 漢字', 8).map(row => row.map(run => run.text).join(''))).toEqual(['漢字漢字', '漢字'])
   })
+
+  test('a closer after a code fence goes on a line of its own, however far the fence is indented', async () => {
+    for (const indent of ['', '   ', '    ', '\t']) {
+      const rows = layout(closeAfter(`text\n${indent}\`\`\`\ncode\n${indent}\`\`\``, link('close', 'k', '«'), '\n'), 40)
+      expect(linkAt(rows, 0, rows.length - 1)).toEqual({ action: 'close', key: 'k' })
+      expect(rows.at(-1)?.some(run => run.code === true)).toBe(false)
+    }
+  })
+
+  test('counts an emoji as two cells and a flag as two in all, so a press after them lands on the right phrase', async () => {
+    expect(widthOf('🚀🚗')).toBe(4)
+    expect(widthOf('🇯🇵')).toBe(2)
+    const rows = layout(`a 🚀 ${link('open', 'k', 'open')} end`, 60)
+    expect(linkAt(rows, 8, 0)).toEqual({ action: 'open', key: 'k' })
+    expect(linkAt(rows, 4, 0)).toBeUndefined()
+  })
+
+  test('a line starting with a fence marker and more text does not close the block, and the lines after it are drawn as code', async () => {
+    const text = ['```', '```python is a content line', 'still code', '```', 'after'].join('\n')
+    expect(layout(text, 40).map(row => row.map(run => [run.text, run.code === true]))).toEqual([
+      [['  ```python is a content line', true]],
+      [['  still code', true]],
+      [['after', false]],
+    ])
+  })
 })
 
 describe('paragraphs', () => {
@@ -264,6 +301,16 @@ describe('paragraphs', () => {
       { text: 'With {{a|a long\n\nform}}.', hasStretch: true },
       { text: '```\n\n```\nAfter.', hasStretch: false },
     ])
+  })
+
+  test('a code span over several lines ends at its closing backtick, so a stretch after it keeps its blank line inside', async () => {
+    const text = ['Use `foo', 'bar` and {{a|long', '', 'form}}.'].join('\n')
+    expect(paragraphsOf(text)).toEqual([{ text, hasStretch: true }])
+  })
+
+  test('a line starting with a fence marker and more text does not close the block', async () => {
+    const text = ['```', '```python', '', '{{a|b}}', '```', 'After.'].join('\n')
+    expect(paragraphsOf(text)).toEqual([{ text, hasStretch: false }])
   })
 })
 

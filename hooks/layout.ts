@@ -2,7 +2,7 @@
 // runs, wrapped to the region's width, so a press can be matched to the phrase under it. Claude
 // Code draws every paragraph without a stretch with its own markdown.
 
-import { isRule } from './parse'
+import { closesFence, isRule, openingFence } from './parse'
 
 /** What a press on a pressable phrase does to its stretch. */
 export type Action = 'open' | 'close'
@@ -32,6 +32,11 @@ const TINT_END = '\ue004'
 // A mark drawn on the letter before it, or a character no terminal draws, takes no cell.
 const ZERO_WIDTH = /[\p{Mn}\p{Me}\p{Default_Ignorable_Code_Point}]/u
 
+// A character drawn as a picture by default, such as 🚀, takes two cells; the first is U+231A, so
+// widthOf tests nothing below it. A flag is two regional indicators that take two cells together,
+// so each one keeps its single cell.
+const EMOJI = /(?!\p{Regional_Indicator})\p{Emoji_Presentation}/u
+
 // Where a row may break in text without spaces. Chinese and Japanese break between any two
 // characters. Korean spaces its words, so it breaks at spaces as Latin text does. Thai, Lao, Khmer
 // and Burmese write words without spaces, and a row breaks between words where Intl.Segmenter
@@ -53,7 +58,7 @@ export function tint(colour: string, word: string): string {
 
 /** Whether a word is markdown syntax rather than text: a bullet, a list number, a rule, a fence, a pipe, a heading mark. */
 export function isMarkup(word: string): boolean {
-  return !/[\p{L}\p{N}]/u.test(word) || /^\d+[.)]$/.test(word) || /^(`{3,}|~{3,})/.test(word)
+  return !/[\p{L}\p{N}]/u.test(word) || /^\d+[.)]$/.test(word) || openingFence(word) !== undefined
 }
 
 /** A pressable phrase for composed text: drawn as `label`, a press does `action` to stretch `key`. */
@@ -68,12 +73,12 @@ export function layout(text: string, columns: number): Row[] {
   let fence: string | undefined
   for (const marked of text.split('\n')) {
     const line = untint(marked)
-    const marker = /^[ \t]*(`{3,}|~{3,})/.exec(line.text)?.[1]
     if (fence !== undefined) {
-      if (marker !== undefined && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined
+      if (closesFence(line.text, fence)) fence = undefined
       else rows.push(...cutRows([{ text: `  ${line.text}`, code: true }], width))
       continue
     }
+    const marker = openingFence(line.text)
     if (marker !== undefined) {
       fence = marker
       continue
@@ -120,7 +125,8 @@ export function widthOf(text: string): number {
     const isWide =
       (c >= 0x1100 && c <= 0x115f) || (c >= 0x2e80 && c <= 0xa4cf) || (c >= 0xac00 && c <= 0xd7a3) ||
       (c >= 0xf900 && c <= 0xfaff) || (c >= 0xfe30 && c <= 0xfe4f) || (c >= 0xff00 && c <= 0xff60) ||
-      (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1f64f) || (c >= 0x1f900 && c <= 0x1f9ff)
+      (c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1f64f) || (c >= 0x1f900 && c <= 0x1f9ff) ||
+      (c >= 0x231a && EMOJI.test(ch))
     cells += ZERO_WIDTH.test(ch) ? 0 : isWide ? 2 : 1
   }
 

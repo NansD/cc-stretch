@@ -17,7 +17,7 @@ project sampled with a fixed seed, and had Claude (Opus 5.5) rewrite each one un
 guide, keeping every fact and adding nothing. Each rewrite is checked to keep the original's
 content words with every stretch open. Replies under 40 words need no stretches by the guide's own
 rule and are counted as written. Across 69 replies the skim was 17% of the original's words (12% to
-19% per project). With every stretch open, the rewrites kept 99% of the original's content words on
+21% per project). With every stretch open, the rewrites kept 99% of the original's content words on
 average (never below 96%), and ran 6% longer: a long form repeats its short form's words so it reads
 in place.
 

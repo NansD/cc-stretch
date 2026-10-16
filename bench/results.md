@@ -9,10 +9,10 @@ The comparison is with the reply as it was first written: what you would have re
 | project | replies | rewritten | original words | skim words | skim / original | median per reply | full / original |
 |---|---|---|---|---|---|---|---|
 | project A | 20 | 19 | 12623 | 2141 | **17%** | 18% | 107% |
-| project B | 20 | 20 | 10826 | 2105 | **19%** | 19% | 106% |
+| project B | 20 | 20 | 10826 | 2263 | **21%** | 19% | 106% |
 | project C | 9 | 9 | 5789 | 720 | **12%** | 17% | 105% |
 | project D | 20 | 20 | 11998 | 1940 | **16%** | 16% | 105% |
-| **all** | 69 | 68 | 41236 | 6906 | **17%** | 18% | 106% |
+| **all** | 69 | 68 | 41236 | 7064 | **17%** | 18% | 106% |
 
 Fidelity of the 68 rewrites: with every stretch open, the text kept a mean 99% of the original's content words (lowest 96%). Replies under 40 words need no stretches by the guide's own rule and were counted as written.
 

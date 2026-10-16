@@ -1,6 +1,6 @@
 {
   "name": "cc-stretch",
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "Stretchtext replies for Claude Code: short by default, each phrase grows in place when you click it",
   "types": "./types/index.d.ts"
 }

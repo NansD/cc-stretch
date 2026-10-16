@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.3.7 — 2026-10-16
+
+- Drawing a reply no longer hangs when a stretch sits inside a short form written over several
+  lines, or when the reply holds a character from U+E000 to U+E004, which the plugin used to mark
+  links. Nerd Font icons sit in that part of Unicode, the Private Use Area; those characters are now
+  drawn as written, and a link after them on the same line opens.
+- The benchmark counts a short form written over several lines as the terminal draws it: already
+  open. One measured reply's skim went from 102 to 260 words, so project B's skim is 21% of the
+  original's words instead of 19%; all projects together stay at 17%.
+- `bench/ab.ts` compares versions of the guide on fixed tasks: it checks each answer against the
+  guide's layout rules and has a model grade it. `bench/README.md` explains how to run it and how a
+  new finding about how Claude writes stretchtext joins it.
+
 ## 0.3.6 — 2026-10-16
 
 - Chinese and Japanese stretches grow a character at a time around their short form, and Thai a

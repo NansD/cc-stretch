@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.6 — 2026-10-16
+
+- Chinese and Japanese stretches grow a character at a time around their short form, and Thai a
+  word at a time, instead of going blank and then appearing whole. The words you already read stay
+  where they are.
+
 ## 0.3.5 — 2026-10-16
 
 - Tool calls are drawn by Claude Code itself again: a click on a finished group's one-line summary

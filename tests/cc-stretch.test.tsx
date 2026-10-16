@@ -583,12 +583,12 @@ test('the next prompt tells the model which stretches were opened and which not'
 
 describe('tool calls', () => {
   const call = { tool_use_id: 'toolu_1', tool: 'Bash', input: {}, isRunning: false, isErrored: false, isInterrupted: false }
-  const mountGroup = ($: Engine, props: { isActive: boolean; isErrored: boolean }) =>
+  const mountGroup = ($: Engine, isExpanded: boolean) =>
     $.ui.mount({
       plugin: 'cc-stretch',
       surface: 'terminal',
       component: 'ToolGroup',
-      props: { calls: [{ ...call, isErrored: props.isErrored }], isActive: props.isActive, isExpanded: true },
+      props: { calls: [call], isActive: false, isExpanded },
       requestId: 'group-1',
       viewport: FULLSCREEN,
     })
@@ -598,29 +598,14 @@ describe('tool calls', () => {
       return <Text>{e.props.isExpanded ? 'every call' : 'Ran 1 shell command'}</Text>
     })
 
-  test('a finished group folds to its one line, and a click opens and folds it', async ($, on) => {
+  // Claude Code folds a finished group to its one-line summary and opens it on a click on that line.
+  // A group the plugin redrew kept its own state, so that click drew the open group's panel behind
+  // the folded line and opened nothing.
+  test('a group of tool calls is drawn as Claude Code draws it', async ($, on) => {
     engineDraws(on)
-    const ui = await mountGroup($, { isActive: false, isErrored: false })
-    expect(await ui.find({ text: 'Ran 1 shell command' })).toBeDefined()
-    expect((await ui.find({ key: 'tools' }))?.text).toContain('▸ show')
-
-    await ui.press({ key: 'tools', link: { href: HREF } })
-    expect(await ui.find({ text: 'every call' })).toBeDefined()
-    expect((await ui.find({ key: 'tools' }))?.text).toContain('▾ fold')
-
-    await ui.press({ key: 'tools', link: { href: HREF } })
-    expect(await ui.find({ text: 'Ran 1 shell command' })).toBeDefined()
-    await ui.unmount()
-  })
-
-  test('a live group, or one holding an error, is drawn by the engine', async ($, on) => {
-    engineDraws(on)
-    for (const props of [
-      { isActive: true, isErrored: false },
-      { isActive: false, isErrored: true },
-    ]) {
-      const ui = await mountGroup($, props)
-      expect(await ui.find({ text: 'every call' })).toBeDefined()
+    for (const isExpanded of [false, true]) {
+      const ui = await mountGroup($, isExpanded)
+      expect(await ui.find({ text: isExpanded ? 'every call' : 'Ran 1 shell command' })).toBeDefined()
       expect(await ui.find({ key: 'tools' })).toBeUndefined()
       await ui.unmount()
     }

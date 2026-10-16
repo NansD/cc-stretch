@@ -8,7 +8,6 @@ import type { ReplyPost, ReplyProps, Tint } from './reply'
 
 const openStretches = atom({ plugin: 'cc-stretch', key: 'open' } as const, [])
 const seen = atom({ plugin: 'cc-stretch', key: 'seen' } as const, [])
-const openGroups = atom({ plugin: 'cc-stretch', key: 'groups' } as const, false)
 const stretchOrder = atom({ plugin: 'cc-stretch', key: 'order' } as const, { order: {}, count: 0 })
 const newestReply = atom({ plugin: 'cc-stretch', key: 'newest' } as const, '')
 
@@ -142,38 +141,6 @@ export const register: Register = on => {
 
     return next({ ...e, context: [...(e.context ?? []), note] })
   }).catch(($, e, next) => next(e))
-
-  // Tool calls fold to Claude Code's own one-line summary of their group once
-  // the group is done, with a link to open it. A live group, or one holding an
-  // error, is drawn as the engine draws it, and so are the desktop app's own tool rows.
-  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (!canPress(e) || e.props.isActive || e.props.calls.some(call => call.isErrored)) return next(e)
-
-    const open = memberOf(openGroups, e)
-    const isOpen = await read($, open)
-    const { Box, Markdown } = $.ui.resolve(e)
-    const toggle = (
-      <Markdown
-        key="tools"
-        text={`[${isOpen ? '▾ fold' : '▸ show'}](${HREF})`}
-        pressableLinks={[HREF]}
-        onLinkPress={() => update($, open, was => !was)}
-      />
-    )
-    const drawn = await next({ ...e, props: { ...e.props, isExpanded: isOpen } })
-
-    return isOpen ? (
-      <Box flexDirection="column">
-        {drawn}
-        <Box paddingLeft={2}>{toggle}</Box>
-      </Box>
-    ) : (
-      <Box flexDirection="row" alignItems="flex-end" gap={1}>
-        {drawn}
-        {toggle}
-      </Box>
-    )
-  })
 
   // The reply that says why stretches are open on the main screen: the first drawn there since the
   // plugin loaded. A render hook cannot write plugin state, so it is kept here.

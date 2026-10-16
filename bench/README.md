@@ -57,3 +57,44 @@ node bench/report.ts
 
 Rewrites and coverage use `claude -p` on your own account. Raw text stays in `bench/out/`, which
 git ignores.
+
+## Comparing guides
+
+The guide in `hooks/guide.ts` is how the plugin teaches Claude to write stretchtext, so changes to it
+are tested here first. `ab.ts` has each guide variant answer the same tasks, then checks the
+answers two ways:
+
+- **Layout rules** (`rules.ts`): checks of the guide's bullets that the text alone can decide, using
+  the plugin's own parser. For example: the long form keeps the short form's words, and each list
+  item stays visible with a stretch of its own. Each rule names the bullet it checks. Rules call no
+  model and are worked out again whenever a report runs, so fixing a rule rescores every earlier run.
+- **Grades** (`grading.ts`): a model judge, never told which guide wrote what, checks the skim and
+  the full answer against each task's key. These are saved, since each one costs a call.
+
+```
+bun bench/ab.ts tasks --out bench/out/<run> --arm g0 --arm g7 [--repeats 2] [--writer opus] [--judge sonnet] [--effort medium]
+bun bench/ab.ts tasks-report --out bench/out/<run>
+bun bench/ab.ts override --out bench/out/<run> --arm g7 --repeat 1 --task cache-options --rule items-stay-visible --holds true --reason "<why the rule is wrong here>"
+```
+
+It runs under `bun`, because the plugin's hooks import each other without file extensions. An arm
+is a variant named in `guides.ts`. The first run freezes its inputs in `<run>/manifest.json`. A
+second run with the same inputs picks up where the first stopped; one with any other input (a
+guide, a task, the writer or judge, or the Claude Code version) is refused. Failed calls are kept as
+failures and tried again on the next run. They never count as grades.
+
+The report shows each rule's own count. Where someone overrode it, the adjudicated count appears
+next to it, and every override is listed with its reason. An override counts only for the answer
+text it was made on.
+
+When you find something new about how Claude writes stretchtext, add it here so every later guide
+gets checked against it:
+
+1. Add tasks to `tasks.ts` that reproduce it. Put a few aside with `heldOut`, so a guide chosen on
+   the others is also seen on tasks it was not chosen on.
+2. Add a rule to `rules.ts`, or a fixture to an existing rule, with examples that must fail and
+   examples that must pass in `tests/bench.test.ts`.
+3. Add the guide change that should fix it to `guides.ts` as a new variant, and run it against `g0`.
+
+`bun bench/stub/check.ts` runs the bench end to end with a stand-in for `claude`, without calling a
+model.

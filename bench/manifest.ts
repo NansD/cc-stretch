@@ -1,7 +1,7 @@
 // What a guide bench run is made of, frozen when it starts. A resume compares the inputs it was
 // given with the run's manifest and refuses any difference before a single call, so one run folder
 // never mixes answers from two writers, judges, guides, task lists, Claude Code versions, or two
-// versions of the code that writes its rows. The revision is kept as provenance only: layout rules
+// versions of what Claude is asked and shown. The revision is kept as provenance only: layout rules
 // are recomputed whenever a report runs.
 import { readTask, stringsOf } from './tasks.ts'
 import type { Task } from './tasks.ts'
@@ -21,10 +21,16 @@ export type Manifest = {
   corpus?: { ids: string[]; sha256: string }
   /** `claude --version`. */
   claude: string
-  /** The SHA-256 of the code that writes a run's rows: the runner, the judge's prompts and the skim they read. */
+  /**
+   * The SHA-256 of the code that decides what Claude is asked and shown, and which rewrites reach the
+   * judge: grading.ts, measure.ts and hooks/parse.ts. The runner itself is not in it.
+   */
   code: string
   revision: { commit: string; isDirty: boolean }
 }
+
+/** What an error says, whatever was thrown. */
+export const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 /** The fields in which `current` differs from the `frozen` manifest, leaving out the revision. */
 export function differences(frozen: Manifest, current: Manifest): string[] {
@@ -56,12 +62,14 @@ export function readManifest(text: string): Manifest {
   const get = (key: string): unknown => (typeof value === 'object' && value !== null ? Reflect.get(value, key) : undefined)
   const [command, repeats, writer, judge, effort, arms, tasks, corpus, claude, code, revision] =
     ['command', 'repeats', 'writer', 'judge', 'effort', 'arms', 'tasks', 'corpus', 'claude', 'code', 'revision'].map(get)
-  const commit = typeof revision === 'object' && revision !== null ? Reflect.get(revision, 'commit') : undefined
-  const isDirty = typeof revision === 'object' && revision !== null ? Reflect.get(revision, 'isDirty') : undefined
+  const commit: unknown = typeof revision === 'object' && revision !== null ? Reflect.get(revision, 'commit') : undefined
+  const isDirty: unknown = typeof revision === 'object' && revision !== null ? Reflect.get(revision, 'isDirty') : undefined
   const armList = typeof arms === 'object' && arms !== null ? Object.entries(arms) : []
   if (
     (command !== 'run' && command !== 'tasks') ||
     typeof repeats !== 'number' ||
+    !Number.isInteger(repeats) ||
+    repeats < 1 ||
     typeof writer !== 'string' ||
     typeof judge !== 'string' ||
     typeof effort !== 'string' ||
@@ -75,7 +83,7 @@ export function readManifest(text: string): Manifest {
     throw new Error('manifest.json is not a guide bench manifest')
   }
   const ids = typeof corpus === 'object' && corpus !== null ? stringsOf(Reflect.get(corpus, 'ids')) : undefined
-  const sha256 = typeof corpus === 'object' && corpus !== null ? Reflect.get(corpus, 'sha256') : undefined
+  const sha256: unknown = typeof corpus === 'object' && corpus !== null ? Reflect.get(corpus, 'sha256') : undefined
   const replies = ids !== undefined && typeof sha256 === 'string' ? { ids, sha256 } : undefined
   // Each command needs its own inputs whole: a tasks run its tasks, a corpus run its replies.
   if (command === 'tasks' && !Array.isArray(tasks)) throw new Error('manifest.json holds no tasks')
@@ -109,7 +117,7 @@ export function rowsOf(text: string): { rows: unknown[]; isCut: boolean } {
     try {
       rows.push(JSON.parse(line))
     } catch (error) {
-      if (i < lines.length - 1 && lines.slice(i + 1).some(rest => rest.trim() !== '')) throw new Error(`line ${i + 1} is malformed: ${(error as Error).message}`)
+      if (i < lines.length - 1 && lines.slice(i + 1).some(rest => rest.trim() !== '')) throw new Error(`line ${i + 1} is malformed: ${messageOf(error)}`)
       isCut = true
     }
   })

@@ -6,6 +6,7 @@
 //   bun bench/ab.ts run --out <dir> --arm <variant>... [--repeats 3] [--writer haiku]
 //                        [--judge haiku] [--effort <level>] [--concurrency 4] [--limit n]
 //   bun bench/ab.ts report --out <dir>                                          prints the comparison
+// Each of these three takes --corpus <file> to use a corpus other than bench/out/corpus.jsonl.
 // The tasks commands compare guides on replies written from scratch instead: each arm answers every
 // task in tasks.ts, and a judge checks each answer, closed and open, against the task's key. Haiku
 // writes no stretch unless a prompt asks for them (as of Claude Code 2.1.301), so it cannot write here.
@@ -16,37 +17,37 @@
 //                                    records a person's verdict on one layout rule for one answer
 // An arm is a guide variant named in guides.ts. A run's first start freezes its inputs in
 // <dir>/manifest.json; a later start with the same inputs resumes where it stopped, and one with any
-// other input, or after the code that writes its rows changed, is refused before a single call. One
-// run at a time per folder. Calls `claude -p` in safe mode, so the person's own CLAUDE.md files,
-// skills and plugins stay out. Runs under bun, as the plugin's hooks import each other without file
-// extensions. Raw text stays in bench/out/, which git ignores.
+// other input, or after what Claude is asked changed (grading.ts and the skim it draws), is refused
+// before a single call. One run at a time per folder, which a lock enforces. Runs under bun, as the
+// plugin's hooks import each other without file extensions. Raw text stays in bench/out/, which git
+// ignores.
 import { execFile, execFileSync } from 'node:child_process'
 import { hash } from 'node:crypto'
-import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, statSync, truncateSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync, truncateSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { growthOf } from '../hooks/grow.ts'
 import { drawnAs, parse, stretches } from '../hooks/parse.ts'
-import { ANSWER, CHECK, claimsOf, gradesOf, KEY, LABELS, pointsOf, POINTS, READ, readChecks, readKey, readLabels, readPoints, resultOf, REWRITE } from './grading.ts'
+import { ANSWER, CHECK, claimsOf, claudeArgs, gradesOf, KEY, LABELS, pointsOf, POINTS, READ, readChecks, readKey, readLabels, readPoints, resultOf, REWRITE } from './grading.ts'
 import type { Claim, Grade } from './grading.ts'
 import { VARIANTS } from './guides.ts'
-import { differences, readManifest, rowsOf } from './manifest.ts'
+import { differences, messageOf, readManifest, rowsOf } from './manifest.ts'
 import type { Manifest } from './manifest.ts'
-import { draw, render, words } from './measure.ts'
+import { draw, marked, recall, render, VALID_RECALL, words } from './measure.ts'
 import { adjudicate, isRuleId, verdictsOf } from './rules.ts'
 import type { Override, RuleId } from './rules.ts'
 import { stringsOf, TASKS } from './tasks.ts'
 import type { Task } from './tasks.ts'
 import { turnsOf } from './transcripts.ts'
 
-const CORPUS = new URL('./out/corpus.jsonl', import.meta.url)
 const REPO = new URL('..', import.meta.url).pathname
-/** The code that writes a run's rows: this runner, the judge's prompts, and the parser and drawing the skim comes from. */
-const RUN_CODE = ['bench/ab.ts', 'bench/grading.ts', 'bench/measure.ts', 'hooks/parse.ts']
+/**
+ * The code that decides what Claude is asked and shown, and which rewrites reach the judge: its
+ * prompts and call flags, and the parser and drawing the skim comes from.
+ */
+const ASKING_CODE = ['bench/grading.ts', 'bench/measure.ts', 'hooks/parse.ts']
 const MIN_WORDS = 40
-/** A rewrite keeping less of the original's content words than this is broken (a refusal, a summary), not shorter. */
-const VALID_RECALL = 0.9
 /** Calls failing in a row before the run stops: a spent usage limit or a lost login fails every call. */
 const MAX_FAILURES = 8
 
@@ -54,7 +55,6 @@ type Reply = { id: string; project: string; session: string; turn: number; reply
 type Role = 'writer' | 'judge'
 
 const sha256 = (text: string) => hash('sha256', text)
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 const fail = (message: string): never => {
   console.error(message)
   process.exit(1)
@@ -62,45 +62,52 @@ const fail = (message: string): never => {
 
 // ---- Commands and their flags ------------------------------------------------------------------
 
-const RUN_FLAGS = ['out', 'arm', 'repeats', 'writer', 'judge', 'effort', 'concurrency', 'limit'] as const
-// Each command takes only its own flags, so a misspelt one stops the run instead of being ignored.
-const COMMANDS: Record<string, { flags: readonly string[]; run: () => void | Promise<void> }> = {
-  corpus: { flags: ['per-project'], run: corpus },
-  run: { flags: RUN_FLAGS, run: runAll },
-  report: { flags: ['out'], run: report },
-  tasks: { flags: RUN_FLAGS, run: runTasks },
-  'tasks-report': { flags: ['out'], run: tasksReport },
-  override: { flags: ['out', 'arm', 'repeat', 'task', 'rule', 'holds', 'reason'], run: override },
-}
+type Flag = 'out' | 'arm' | 'repeats' | 'writer' | 'judge' | 'effort' | 'concurrency' | 'limit' | 'corpus' | 'per-project' | 'repeat' | 'task' | 'rule' | 'holds' | 'reason'
+type Command = { flags: readonly Flag[]; run: () => void | Promise<void>; isArmList?: true; hasDirs?: true }
+const RUN_FLAGS: readonly Flag[] = ['out', 'arm', 'repeats', 'writer', 'judge', 'effort', 'concurrency', 'limit']
+// Each command takes only its own flags, so a misspelt one stops the run instead of being ignored. A
+// run compares several arms; an override names one answer, so one arm.
+const COMMANDS: Map<string, Command> = new Map([
+  ['corpus', { flags: ['per-project', 'corpus'], run: corpus, hasDirs: true }],
+  ['run', { flags: [...RUN_FLAGS, 'corpus'], run: runAll, isArmList: true }],
+  ['report', { flags: ['out', 'corpus'], run: report }],
+  ['tasks', { flags: RUN_FLAGS, run: runTasks, isArmList: true }],
+  ['tasks-report', { flags: ['out'], run: tasksReport }],
+  ['override', { flags: ['out', 'arm', 'repeat', 'task', 'rule', 'holds', 'reason'], run: override }],
+])
 const [command = '', ...rest] = process.argv.slice(2)
-const chosen = Object.hasOwn(COMMANDS, command) ? COMMANDS[command] : undefined
-if (chosen === undefined) fail(`usage: bun bench/ab.ts ${Object.keys(COMMANDS).join('|')} ...`)
-// A run compares several arms; an override names one answer, so one arm.
-const isArmList = command === 'run' || command === 'tasks'
-const { values: flags, positionals } = (() => {
+const chosen: Command = COMMANDS.get(command) ?? fail(`usage: bun bench/ab.ts ${[...COMMANDS.keys()].join('|')} ...`)
+type Parsed = { values: Record<string, string | boolean | (string | boolean)[] | undefined>; positionals: string[] }
+const isMultiple = (name: Flag) => name === 'arm' && chosen.isArmList === true
+const { values: flags, positionals }: Parsed = ((): Parsed => {
   try {
-    return parseArgs({
+    const parsed = parseArgs({
       args: rest,
-      options: Object.fromEntries((chosen?.flags ?? []).map(name => [name, { type: 'string', multiple: name === 'arm' && isArmList }] as const)),
-      allowPositionals: command === 'corpus',
+      options: Object.fromEntries(chosen.flags.map(name => [name, { type: 'string', multiple: isMultiple(name) }] as const)),
+      allowPositionals: chosen.hasDirs === true,
       strict: true,
+      tokens: true,
     })
+    // parseArgs keeps the last of a repeated flag; a run must not quietly take one of two values.
+    const given = parsed.tokens.flatMap(token => (token.kind === 'option' && !chosen.flags.some(name => name === token.name && isMultiple(name)) ? [token.name] : []))
+    const twice = given.find((name, i) => given.indexOf(name) !== i)
+    return twice === undefined ? parsed : fail(`${command}: --${twice} is given twice`)
   } catch (error) {
     return fail(`${command}: ${messageOf(error)}`)
   }
 })()
-const flag = (name: string) => {
+const flag = (name: Flag): string | undefined => {
   const value = flags[name]
   return typeof value === 'string' ? value : undefined
 }
-/** A whole number of at least 1 given with `name`, or `fallback` when it is left out. */
-const count = (name: string, fallback: number) => {
+/** A whole number of at least 1 given with `name`, written in plain digits, or `fallback` when it is left out. */
+const count = (name: Flag, fallback: number): number => {
   const value = flag(name)
   if (value === undefined) return fallback
-  const n = Number(value)
-  return Number.isInteger(n) && n >= 1 ? n : fail(`--${name} wants a whole number of at least 1, not ${value}`)
+  return /^[1-9]\d*$/.test(value) ? Number(value) : fail(`--${name} wants a whole number of at least 1, not ${value}`)
 }
-const outDir = () => flag('out') ?? fail('--out <dir> is required')
+const corpusFile: string = flag('corpus') ?? new URL('./out/corpus.jsonl', import.meta.url).pathname
+const outDir = (): string => flag('out') ?? fail('--out <dir> is required')
 
 // ---- Run folders -------------------------------------------------------------------------------
 
@@ -164,7 +171,7 @@ async function attempt<T extends Record<string, unknown>>(file: string, slot: Re
 /** The manifest these inputs make, with the code and versions they run against. */
 function manifestOf(fields: Omit<Manifest, 'claude' | 'code' | 'revision'>): Manifest {
   const claudeVersion = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim()
-  const code = sha256(RUN_CODE.map(file => readFileSync(join(REPO, file), 'utf8')).join('\n'))
+  const code = sha256(ASKING_CODE.map(file => readFileSync(join(REPO, file), 'utf8')).join('\n'))
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim()
   const isDirty = execFileSync('git', ['status', '--porcelain', '--', 'hooks', 'bench'], { cwd: REPO, encoding: 'utf8' }).trim() !== ''
   return { ...fields, claude: claudeVersion, code, revision: { commit, isDirty } }
@@ -176,7 +183,6 @@ function manifestOf(fields: Omit<Manifest, 'claude' | 'code' | 'revision'>): Man
  * cut short before it leaves a folder the next start simply begins again.
  */
 function openRun(out: string, current: Manifest, guides: Record<string, string>): void {
-  mkdirSync(out, { recursive: true })
   const file = join(out, 'manifest.json')
   if (existsSync(file)) {
     let frozen: Manifest
@@ -192,6 +198,33 @@ function openRun(out: string, current: Manifest, guides: Record<string, string>)
   if (readdirSync(out).some(name => name.endsWith('.jsonl'))) fail(`${out} holds rows from before run manifests, which cannot be checked. Start a new --out.`)
   for (const [arm, text] of Object.entries(guides)) writeFileSync(join(out, `guide-${arm}.txt`), text)
   writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`, { flag: 'wx' })
+}
+
+/** Whether process `pid` is running; one owned by another user answers EPERM, and is running. */
+function isRunning(pid: number): boolean {
+  try {
+    return process.kill(pid, 0)
+  } catch (error) {
+    return error instanceof Error && 'code' in error && error.code === 'EPERM'
+  }
+}
+
+/**
+ * Holds `out` for this process until it exits, before anything costly runs: two runs appending to one
+ * folder would each answer every task, and one's repair of a cut line could drop the other's row. A
+ * lock whose process has gone, as after a crash, is taken over.
+ */
+function lock(out: string) {
+  mkdirSync(out, { recursive: true })
+  const file = join(out, 'run.lock')
+  try {
+    writeFileSync(file, String(process.pid), { flag: 'wx' })
+  } catch {
+    const holder = Number(readFileSync(file, 'utf8'))
+    if (Number.isInteger(holder) && holder > 0 && isRunning(holder)) fail(`${out} is in use by another run (process ${holder}); wait for it, or use another --out`)
+    writeFileSync(file, String(process.pid))
+  }
+  process.on('exit', () => rmSync(file, { force: true }))
 }
 
 /** The run in `out`, as its manifest froze it; a report reads nothing else for its inputs. */
@@ -224,11 +257,8 @@ function noteModels(role: Role, found: unknown[]) {
 
 /** One `claude -p` answer and the models that gave it. Stdin is closed at once, so Claude Code does not wait for piped input. */
 function claude(role: Role, model: string, prompt: string, options: { system?: string; effort?: string } = {}): Promise<{ text: string; models: string[] }> {
-  const args = ['-p', '--model', model, '--safe-mode', '--no-session-persistence', '--tools', '', '--output-format', 'json']
-  if (options.effort !== undefined) args.push('--effort', options.effort)
-  if (options.system !== undefined) args.push('--append-system-prompt', options.system)
   return new Promise((resolve, reject) => {
-    const child = execFile('claude', [...args, prompt], { maxBuffer: 1 << 26, timeout: 900000, cwd: BLANK }, (error, stdout, stderr) => {
+    const child = execFile('claude', claudeArgs(model, prompt, options), { maxBuffer: 1 << 26, timeout: 900000, cwd: BLANK }, (error, stdout, stderr) => {
       try {
         const answer = resultOf(stdout)
         const models = answer.models.join(',')
@@ -241,9 +271,12 @@ function claude(role: Role, model: string, prompt: string, options: { system?: s
       } catch (parsing) {
         failures += 1
         // The process's own words say more than "no JSON" when Claude Code refused to start or was killed.
-        const why = error?.killed === true
-          ? `killed (${error.signal ?? 'timeout'}) after the time limit`
-          : [messageOf(parsing), /\S.*/.exec(stderr)?.[0]].filter(Boolean).join(': ') + (error?.code === undefined ? '' : ` (exit ${String(error.code)})`)
+        const ended = error === null ? '' : typeof error.code === 'number' ? ` (exit ${error.code})` : error.signal ? ` (signal ${error.signal})` : ''
+        const why = error?.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER'
+          ? 'its output passed the buffer limit'
+          : error?.killed === true && error.signal === 'SIGTERM'
+          ? 'killed after the time limit'
+          : [messageOf(parsing), /\S.*/.exec(stderr)?.[0]].filter(Boolean).join(': ') + ended
         reject(new Error(why))
       }
     })
@@ -252,23 +285,6 @@ function claude(role: Role, model: string, prompt: string, options: { system?: s
 }
 
 // ---- Measures ----------------------------------------------------------------------------------
-
-/** The skim with each link in view numbered, and their long forms, opened, in that order. */
-function marked(text: string): { skim: string; longs: string[] } {
-  const longs: string[] = []
-  const skim = draw(parse(text), new Set(), (link, shown) => {
-    longs.push(draw(link.long ?? [], 'all'))
-    return `⟦${longs.length}⟧${shown}⟦/${longs.length}⟧`
-  })
-  return { skim, longs }
-}
-
-/** How many of the original's content words (four letters or more) the full rewrite still has. */
-function recall(original: string, full: string): number {
-  const bag = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}_'-]{4,}/gu) ?? [])
-  const before = bag(original), after = bag(full)
-  return before.size === 0 ? 1 : [...before].filter(w => after.has(w)).length / before.size
-}
 
 /** What the reader faces in one rewrite, from its text alone. */
 function shape(original: string, text: string) {
@@ -306,7 +322,10 @@ async function labelsIn(judge: string, text: string): Promise<{ labels: number; 
 }
 
 const score = (v: Grade) => (v === 'yes' ? 1 : v === 'partly' ? 0.5 : 0)
-const mean = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / Math.max(1, xs.length)
+/** The mean, or NaN for no values, which a report prints as n/a rather than as a zero nobody measured. */
+const mean = (xs: number[]) => (xs.length === 0 ? NaN : xs.reduce((a, b) => a + b, 0) / xs.length)
+/** `x` with `digits` decimals, as a percentage when asked, or n/a when nothing was measured. */
+const shown = (x: number, digits = 0, isPercent = false) => (Number.isNaN(x) ? 'n/a' : `${(isPercent ? 100 * x : x).toFixed(digits)}${isPercent ? '%' : ''}`)
 const sd = (xs: number[]) => (xs.length < 2 ? 0 : Math.sqrt(xs.reduce((a, b) => a + (b - mean(xs)) ** 2, 0) / (xs.length - 1)))
 const repeatsOf = (run: Manifest) => Array.from({ length: run.repeats }, (_, i) => i + 1)
 
@@ -315,6 +334,7 @@ const repeatsOf = (run: Manifest) => Array.from({ length: run.repeats }, (_, i) 
 /** Freezes a seeded sample of real replies, so every later run reads the same ones. */
 function corpus() {
   const perProject = count('per-project', 15)
+  if (positionals.length === 0) fail('corpus wants the project folders to sample, as ~/.claude/projects/<dir>')
   const sample: Reply[] = []
   for (const dir of positionals) {
     const project = dir.split('/').filter(Boolean).pop() ?? dir
@@ -329,9 +349,10 @@ function corpus() {
     }
     for (const t of turns.slice(0, perProject)) sample.push({ id: `${project}#${t.session}#${t.index}`, project, session: t.session, turn: t.index, reply: t.reply })
   }
-  mkdirSync(new URL('./out/', import.meta.url), { recursive: true })
-  writeFileSync(CORPUS, sample.map(r => JSON.stringify(r)).join('\n') + '\n')
-  console.log(`froze ${sample.length} replies in bench/out/corpus.jsonl`)
+  if (sample.length === 0) fail('those folders hold no reply long enough to sample; the corpus is left as it was')
+  mkdirSync(dirname(corpusFile), { recursive: true })
+  writeFileSync(corpusFile, sample.map(r => JSON.stringify(r)).join('\n') + '\n')
+  console.log(`froze ${sample.length} replies in ${corpusFile}`)
 }
 
 /** The arms asked for, each a guide variant by name; an unknown name stops the run before anything is written. */
@@ -340,13 +361,13 @@ function armsOf() {
   if (names.length === 0) return fail(`--arm <variant> is required: ${Object.keys(VARIANTS).join(', ')}`)
   return names.map(name => ({
     name,
-    guide: Object.hasOwn(VARIANTS, name) ? (VARIANTS[name] ?? '') : fail(`--arm ${name} is no guide variant; guides.ts has ${Object.keys(VARIANTS).join(', ')}`),
+    guide: (Object.hasOwn(VARIANTS, name) ? VARIANTS[name] : undefined) ?? fail(`--arm ${name} is no guide variant; guides.ts has ${Object.keys(VARIANTS).join(', ')}`),
   }))
 }
 
 /** The replies of the frozen corpus, read strictly. */
 function corpusReplies(): Reply[] {
-  return rows(CORPUS).flatMap(row => {
+  return rows(corpusFile).flatMap(row => {
     const [id, project, session, turn, reply] = ['id', 'project', 'session', 'turn', 'reply'].map(key => get(row, key))
     return typeof id === 'string' && typeof project === 'string' && typeof session === 'string' && typeof turn === 'number' && typeof reply === 'string'
       ? [{ id, project, session, turn, reply }]
@@ -394,11 +415,13 @@ async function runAll() {
   const effort = flag('effort')
   const concurrency = count('concurrency', 4)
   const replies = corpusReplies().slice(0, count('limit', Infinity))
-  if (replies.length === 0) fail('no corpus: run `bun bench/ab.ts corpus` first')
+  if (replies.length === 0) fail(`no corpus in ${corpusFile}: run \`bun bench/ab.ts corpus\` first`)
+  // The flags are all checked by now, so a refused start leaves no folder behind.
+  lock(out)
   openRun(out, manifestOf({
     command: 'run', repeats, writer, judge, effort: effort ?? 'default',
     arms: Object.fromEntries(arms.map(a => [a.name, sha256(a.guide)])),
-    corpus: { ids: replies.map(r => r.id), sha256: sha256(readFileSync(CORPUS, 'utf8')) },
+    corpus: { ids: replies.map(r => r.id), sha256: sha256(readFileSync(corpusFile, 'utf8')) },
   }), Object.fromEntries(arms.map(a => [a.name, a.guide])))
 
   const pointsFile = join(out, 'points.jsonl'), rewritesFile = join(out, 'rewrites.jsonl'), judgedFile = join(out, 'judged.jsonl')
@@ -455,6 +478,8 @@ async function runTasks() {
   const effort = flag('effort')
   const concurrency = count('concurrency', 4)
   const tasks = TASKS.slice(0, count('limit', Infinity))
+  // The flags are all checked by now, so a refused start leaves no folder behind.
+  lock(out)
   openRun(out, manifestOf({
     command: 'tasks', repeats, writer, judge, effort: effort ?? 'default',
     arms: Object.fromEntries(arms.map(a => [a.name, sha256(a.guide)])),
@@ -516,7 +541,7 @@ function overridesIn(out: string): Map<string, Override[]> {
 function override() {
   const out = outDir()
   const run = frozenRun(out)
-  const [arm, id, rule, holds, reason] = ['arm', 'task', 'rule', 'holds', 'reason'].map(flag)
+  const [arm, id, rule, holds, reason] = (['arm', 'task', 'rule', 'holds', 'reason'] as const).map(flag)
   if (arm === undefined || flag('repeat') === undefined || id === undefined) return fail('--arm, --repeat and --task name the answer')
   const repeat = count('repeat', 1)
   const task = run.tasks?.find(t => t.id === id) ?? fail(`--task ${id} is no task of this run`)
@@ -562,7 +587,8 @@ function tasksReport() {
   console.log(`writer ${run.writer} (effort ${run.effort}), judge ${run.judge}, Claude Code ${run.claude}; ${tasks.length} of ${run.tasks.length} tasks graded in every arm and repeat; ${failed} failed calls\n`)
 
   // Each answer's numbers, worked out once.
-  const each = new Map(tasks.flatMap(t => slots(t).map(({ k }) => [k, { g: gradedOf(gradedBy.get(k), t), s: shape('', texts.get(k) ?? '') }] as const)))
+  const textAt = (k: string) => texts.get(k) ?? fail(`no answer for ${k}`)
+  const each = new Map(tasks.flatMap(t => slots(t).map(({ k }) => [k, { g: gradedOf(gradedBy.get(k), t), s: shape('', textAt(k)) }] as const)))
   const cell = (arm: string, task: Task) => {
     const found = repeats.flatMap(rep => each.get(at(arm, rep, task.id)) ?? [])
     return {
@@ -581,10 +607,10 @@ function tasksReport() {
     for (const t of tasks) console.log(`| ${t.id} | ${arms.map(arm => show(cell(arm, t))).join(' | ')} |`)
     console.log('')
   }
-  const pct = (x: number) => `${Math.round(100 * x)}%`
+  const pct = (x: number) => shown(x, 0, true)
   table('Must-know points the skim carries', c => pct(c.skimPoints))
-  table('Words: skim / full', c => `${Math.round(c.skimWords)} / ${Math.round(c.fullWords)}`)
-  table('Links in view (of them, labels)', c => `${c.linksInView.toFixed(1)} (${c.labels.toFixed(1)})`)
+  table('Words: skim / full', c => `${shown(c.skimWords)} / ${shown(c.fullWords)}`)
+  table('Links in view (of them, labels)', c => `${shown(c.linksInView, 1)} (${shown(c.labels, 1)})`)
 
   const [base, ...others] = arms
   if (base !== undefined && others.length > 0) {
@@ -606,7 +632,7 @@ function tasksReport() {
   const answered = run.tasks.filter(t => slots(t).every(({ k }) => texts.has(k)))
   const overrides = overridesIn(out)
   const ruleVerdicts = new Map(answered.flatMap(t => slots(t).map(({ k }) => {
-    const text = texts.get(k) ?? '', answerSha256 = sha256(text)
+    const text = textAt(k), answerSha256 = sha256(text)
     return [k, verdictsOf(text, t).map(v => ({ ...v, adjudicated: adjudicate(v, overrides.get(k) ?? [], answerSha256) }))] as const
   })))
   const ruleTable = (title: string, set: Task[]) => {
@@ -661,7 +687,7 @@ function report() {
   const out = outDir()
   const run = frozenRun(out)
   if (run.command !== 'run' || run.corpus === undefined) return fail(`${out} is not a corpus run`)
-  if (sha256(readFileSync(CORPUS, 'utf8')) !== run.corpus.sha256) fail('bench/out/corpus.jsonl changed after this run started')
+  if (sha256(readFileSync(corpusFile, 'utf8')) !== run.corpus.sha256) fail(`${corpusFile} is not the corpus this run started with`)
   const arms = Object.keys(run.arms)
   const ids = new Set(run.corpus.ids)
   const replies = new Map(corpusReplies().filter(r => ids.has(r.id)).map(r => [r.id, r]))
@@ -673,9 +699,14 @@ function report() {
     if (pointCount === undefined || typeof labels !== 'number' || typeof linksInView !== 'number') throw new Error(`the judgment of ${keyOf(row)} is malformed`)
     return [keyOf(row), { labels, linksInView, verdicts: gradesOf(get(row, 'verdicts'), pointCount, 'verdicts') }] as const
   }))
-  const pct = (x: number) => `${(100 * x).toFixed(1)}`
+  const pct = (x: number) => shown(x, 1, true)
   const repeats = repeatsOf(run)
 
+  /** A reply's rewrite measured, with its judgment, for one arm and repeat. */
+  const lookup = (arm: string, rep: number, id: string) => {
+    const reply = replies.get(id), text = rewrites.get(at(arm, rep, id)), j = judged.get(at(arm, rep, id))
+    return reply === undefined || text === undefined || j === undefined ? undefined : { s: shape(reply.reply, text), j }
+  }
   // A reply counts only where every arm has a judged rewrite in every repeat, so arms meet the same replies.
   const counted = [...replies.keys()].filter(id => arms.every(arm => repeats.every(rep => judged.has(at(arm, rep, id)) && rewrites.has(at(arm, rep, id)))))
   console.log(`writer ${run.writer} (effort ${run.effort}), judge ${run.judge}, Claude Code ${run.claude}; ${counted.length} of ${replies.size} replies judged in every arm and repeat`)
@@ -686,19 +717,19 @@ function report() {
   const metrics = ['skim share', 'right-only stretches', 'words added left', 'words added middle', 'colon titles', 'labels', 'top-3 points carried', 'all points carried'] as const
   // Each arm and repeat's measures, worked out once.
   const perRun = (arm: string, repeat: number) => {
-    const found = counted.map(id => ({ s: shape(replies.get(id)?.reply ?? '', rewrites.get(at(arm, repeat, id)) ?? ''), j: judged.get(at(arm, repeat, id)) }))
+    const found = counted.flatMap(id => lookup(arm, repeat, id) ?? [])
     const added = found.reduce((a, r) => a + r.s.sides.before + r.s.sides.between + r.s.sides.after, 0)
     const links = found.reduce((a, r) => a + r.s.links, 0)
-    const inView = found.reduce((a, r) => a + (r.j?.linksInView ?? 0), 0)
+    const inView = found.reduce((a, r) => a + r.j.linksInView, 0)
     return {
       'skim share': found.reduce((a, r) => a + r.s.skim, 0) / found.reduce((a, r) => a + r.s.original, 0),
       'right-only stretches': found.reduce((a, r) => a + r.s.rightOnly, 0) / links,
       'words added left': found.reduce((a, r) => a + r.s.sides.before, 0) / added,
       'words added middle': found.reduce((a, r) => a + r.s.sides.between, 0) / added,
       'colon titles': found.reduce((a, r) => a + r.s.colon, 0) / links,
-      labels: found.reduce((a, r) => a + (r.j?.labels ?? 0), 0) / inView,
-      'top-3 points carried': mean(found.map(r => mean((r.j?.verdicts ?? []).slice(0, 3).map(score)))),
-      'all points carried': mean(found.map(r => mean((r.j?.verdicts ?? []).map(score)))),
+      labels: found.reduce((a, r) => a + r.j.labels, 0) / inView,
+      'top-3 points carried': mean(found.map(r => mean(r.j.verdicts.slice(0, 3).map(score)))),
+      'all points carried': mean(found.map(r => mean(r.j.verdicts.map(score)))),
     }
   }
   const measured = new Map(arms.map(arm => [arm, repeats.map(rep => perRun(arm, rep))]))
@@ -714,4 +745,4 @@ function report() {
   console.log('\nEach cell: the mean of the repeats, ± how much the repeats differ (standard deviation).')
 }
 
-await chosen?.run()
+await chosen.run()

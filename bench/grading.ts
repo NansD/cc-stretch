@@ -2,7 +2,8 @@
 // answer a task under a guide; a judge, which is never told which guide wrote what, lists a reply's
 // must-know points, reads a skim, and grades text against a key. Every judge answer is read
 // strictly: a wrong count or a word outside the expected set throws, so a confused judge becomes a
-// failed call that a resume retries, never a grade.
+// failed call that a resume retries, never a grade. A run's manifest hashes this file, so a change
+// to what Claude is asked is never mixed into a run begun before it.
 import { stringsOf } from './tasks.ts'
 import type { Task } from './tasks.ts'
 
@@ -34,6 +35,19 @@ export const KEY = (text: string, know: string[], never: string[]) =>
   `Below is a reply from a coding assistant, as much of it as a reader sees, then a list of points and a list of claims. Judge only what the text itself says; do not fill gaps from the lists.\n- For each point, in order: does the text tell the reader this? "yes", "partly" or "no".\n- For each claim, in order: does the text state it, or leave a reader believing it? "yes" or "no".\nOutput only JSON of the form {"know":["yes"],"never":["no"]}, one entry per point and per claim.\n\n<text>\n${text}\n</text>\n\n<points>\n${numbered(know)}\n</points>\n\n<claims>\n${numbered(never)}\n</claims>`
 
 const numbered = (items: string[]) => items.map((item, i) => `${i + 1}. ${item}`).join('\n')
+
+/**
+ * The arguments of one `claude -p` call: safe mode keeps the person's own CLAUDE.md files, skills and
+ * plugins out, and no tools are offered, so the guide is the only instruction beyond Claude Code's own.
+ */
+export function claudeArgs(model: string, prompt: string, options: { system?: string; effort?: string }): string[] {
+  return [
+    '-p', '--model', model, '--safe-mode', '--no-session-persistence', '--tools', '', '--output-format', 'json',
+    ...(options.effort === undefined ? [] : ['--effort', options.effort]),
+    ...(options.system === undefined ? [] : ['--append-system-prompt', options.system]),
+    prompt,
+  ]
+}
 
 export type Grade = 'yes' | 'partly' | 'no'
 export type Claim = 'yes' | 'no'

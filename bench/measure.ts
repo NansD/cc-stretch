@@ -33,6 +33,26 @@ export function draw(parts: Segment[], opened: ReadonlySet<string> | 'all', mark
     .join('')
 }
 
+/** A reply's skim with each link in view numbered, and their long forms, opened, in that order: what the label judge reads. */
+export function marked(text: string): { skim: string; longs: string[] } {
+  const longs: string[] = []
+  const skim = draw(parse(text), new Set(), (link, shown) => {
+    longs.push(draw(link.long ?? [], 'all'))
+    return `⟦${longs.length}⟧${shown}⟦/${longs.length}⟧`
+  })
+  return { skim, longs }
+}
+
+/** A rewrite keeping less of the original's content words than this is broken (a refusal, a summary), not shorter, and is not judged. */
+export const VALID_RECALL = 0.9
+
+/** How many of the original's content words (four letters or more) the full rewrite still has. */
+export function recall(original: string, full: string): number {
+  const bag = (text: string) => new Set(text.toLowerCase().match(/[\p{L}\p{N}_'-]{4,}/gu) ?? [])
+  const before = bag(original), after = bag(full)
+  return before.size === 0 ? 1 : [...before].filter(w => after.has(w)).length / before.size
+}
+
 /** Words a person reads: whitespace-separated tokens holding a letter or a digit. */
 export function words(text: string): number {
   return text.split(/\s+/).filter(token => /[\p{L}\p{N}]/u.test(token)).length

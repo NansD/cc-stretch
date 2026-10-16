@@ -80,9 +80,9 @@ bun bench/ab.ts override --out bench/out/<run> --arm g7 --repeat 1 --task cache-
 It runs under `bun`, because the plugin's hooks import each other without file extensions. An arm
 is a variant named in `guides.ts`. The first run freezes its inputs in `<run>/manifest.json`. A
 second run with the same inputs picks up where the first stopped; one with any other input (a
-guide, a task, the writer or judge, the Claude Code version, or the bench code that writes its rows)
-is refused. Failed calls are kept as failures and tried again on the next run. They never count as
-grades. Run one at a time per folder: two at once would each answer every task.
+guide, a task, the writer or judge, the Claude Code version, or what Claude is asked: the prompts and
+call flags in `grading.ts`, and the skim they show) is refused. Failed calls are kept as failures and tried again
+on the next run. They never count as grades. A lock lets only one run use a folder at a time.
 
 The report shows each rule's own count. Where someone overrode it, the adjudicated count appears
 next to it, and every override is listed with its reason. An override counts only for the answer

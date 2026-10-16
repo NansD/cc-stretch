@@ -128,6 +128,44 @@ check(
   adjudicated.output,
 )
 
+// A corpus run writes every reply's must-know points before any rewrite. A reply whose points failed
+// gets no rewrite, the run exits 1, and a resume finishes it. The replies say what the stand-in's
+// rewrite says, so its rewrites keep their content words.
+const corpusFile = join(scratch, 'corpus.jsonl')
+const plain = 'The options are below.\n\n- Memory is fast, but lost on restart.\n- SQLite persists locally, unshared.\n- Redis is shared across replicas.'
+writeFileSync(corpusFile, [
+  { id: 'p#s#1', project: 'p', session: 's', turn: 1, reply: plain },
+  { id: 'p#s#2', project: 'p', session: 's', turn: 2, reply: `${plain} Second.` },
+].map(row => JSON.stringify(row)).join('\n') + '\n')
+const corpusRun = join(scratch, 'corpus-run')
+const run = (env: Record<string, string> = {}) => bench(['run', '--out', corpusRun, '--corpus', corpusFile, '--arm', 'g0', '--repeats', '1'], env)
+r = run({ STUB_FAIL_MATCH: '\\{"points"[\\s\\S]*Second' })
+const rewritten = rowsIn(corpusRun, 'rewrites.jsonl').length
+check('a corpus run rewrites only replies whose points exist, and exits 1', r.status === 1 && ok(corpusRun, 'points.jsonl') === 1 && rewritten === 1 && ok(corpusRun, 'judged.jsonl') === 1, r.output)
+r = run()
+const corpusReport = bench(['report', '--out', corpusRun, '--corpus', corpusFile])
+check('a resume finishes the corpus run, and its report reads both replies', r.status === 0 && ok(corpusRun, 'judged.jsonl') === 2 && corpusReport.status === 0 && corpusReport.output.includes('2 of 2 replies judged'), `${r.output}\n${corpusReport.output}`)
+
+// One run at a time per folder: a lock held by a live process refuses a second, and one left by a
+// process that has gone is taken over.
+const locked = join(scratch, 'locked')
+mkdirSync(locked)
+writeFileSync(join(locked, 'run.lock'), String(process.pid))
+const held = tasks(locked)
+writeFileSync(join(locked, 'run.lock'), '999999')
+r = tasks(locked, 'g0', {}, ['--limit', '1'])
+check('a folder another live run holds is refused, and a dead run\'s lock is taken over', held.status === 1 && held.output.includes('in use by another run') && r.status === 0, `${held.output}\n${r.output}`)
+
+// A flag given twice, or a corpus command with no folders, stops before anything is written.
+const twice = bench(['tasks', '--out', join(scratch, 'twice'), '--arm', 'g0', '--repeats', '2', '--repeats', '1'])
+const twoArms = bench(['override', '--out', every, '--arm', 'g7', '--arm', 'g0', '--repeat', '1', '--task', 'cache-options', '--rule', 'items-stay-visible', '--holds', 'true', '--reason', 'x'])
+const noDirs = bench(['corpus', '--corpus', join(scratch, 'empty.jsonl')])
+check(
+  'a flag given twice, two arms for one override, or a corpus with no folders, is refused',
+  twice.status === 1 && twice.output.includes('given twice') && twoArms.status === 1 && twoArms.output.includes('--arm is given twice') && noDirs.status === 1 && !readdirSync(scratch).includes('empty.jsonl'),
+  `${twice.output}\n${twoArms.output}\n${noDirs.output}`,
+)
+
 // A folder from before manifests, or with an unreadable one, is refused.
 const old = join(scratch, 'old')
 mkdirSync(old)

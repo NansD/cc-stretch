@@ -20,9 +20,14 @@ export const CHECK = (points: string[], notes: string) =>
 export const LABELS = (skim: string, longs: string[]) =>
   `Below is a reply as a reader first sees it. Some phrases are marked ⟦n⟧…⟦/n⟧; a click on one replaces it with its long form, listed under the reply. Judge every marked phrase as it reads in its place, before any click:\n- "gist": it says something itself: a claim, an answer, a finding, a step, or a phrase that completes its sentence with real content.\n- "label": it only names or announces what its long form says, as a heading or a teaser does ("Details.", "What changed.", "Two options exist.", "The fix:").\nOutput only JSON of the form {"verdicts":{"1":"gist"}}, one entry per number.\n\n<reply>\n${skim}\n</reply>\n<long-forms>\n${longs.map((l, i) => `${i + 1}: ${l}`).join('\n')}\n</long-forms>`
 
-/** What a writer is asked for a task: a question with the evidence it may use, and any closing instruction. */
-export const ANSWER = (task: Task) =>
-  `I ran these in my project, on my machine, and pasted what they showed. That is all you know about the project; your own working folder is unrelated to it.\n\n<evidence>\n${task.evidence}\n</evidence>\n\n${task.question}${task.closing === undefined ? '' : `\n\n${task.closing}`}`
+/** What a writer is asked for a task: its question with the evidence it may use, or its reply to rewrite, then any closing instruction. */
+export function ANSWER(task: Task): string {
+  const asked =
+    task.kind === 'rewrite'
+      ? REWRITE(task.reply)
+      : `I ran these in my project, on my machine, and pasted what they showed. That is all you know about the project; your own working folder is unrelated to it.\n\n<evidence>\n${task.evidence}\n</evidence>\n\n${task.question}`
+  return task.closing === undefined ? asked : `${asked}\n\n${task.closing}`
+}
 
 export const KEY = (text: string, know: string[], never: string[]) =>
   `Below is a reply from a coding assistant, as much of it as a reader sees, then a list of points and a list of claims. Judge only what the text itself says; do not fill gaps from the lists.\n- For each point, in order: does the text tell the reader this? "yes", "partly" or "no".\n- For each claim, in order: does the text state it, or leave a reader believing it? "yes" or "no".\nOutput only JSON of the form {"know":["yes"],"never":["no"]}, one entry per point and per claim.\n\n<text>\n${text}\n</text>\n\n<points>\n${numbered(know)}\n</points>\n\n<claims>\n${numbered(never)}\n</claims>`

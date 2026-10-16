@@ -9,6 +9,8 @@ import { readChecks, readKey, readLabels, readPoints, resultOf } from '../bench/
 import { differences, readManifest, rowsOf } from '../bench/manifest.ts'
 import type { Manifest } from '../bench/manifest.ts'
 import { readTask, TASKS } from '../bench/tasks.ts'
+import { ADDED, VARIANTS } from '../bench/guides.ts'
+import { GUIDE } from '../hooks/guide.ts'
 import type { Layout } from '../bench/tasks.ts'
 
 const REPLY = 'The build {{fails|fails on {{a stale cache|a cache keyed only by the lockfile}}}}. Fix `{{x|y}}` first.'
@@ -94,6 +96,7 @@ describe('layout rules', () => {
       '- Memory is temporary.\n- SQLite persists.\n- Redis is shared.',
       '- {{Memory is temporary.|Memory is temporary.}}\n- {{SQLite persists.|SQLite persists.}}\n- {{Redis is shared.|Redis is shared.}}',
       '{{Memory, SQLite and Redis all work.|Memory is fast, SQLite persists, Redis is shared.}}',
+      '{{Memory and SQLite both keep little.|Memory and SQLite both keep little across restarts.}} {{Redis is shared.|Redis is shared across replicas.}} {{Restarts lose data.|Restarts lose data in memory.}}',
     ], [
       `- ${own('Memory')}\n- ${own('SQLite')}\n- ${own('Redis')}`,
       `${own('Memory')} It is the one to pick.\n\n- ${own('SQLite')}\n- ${own('Redis')}`,
@@ -128,6 +131,8 @@ describe('run manifests and judge answers', () => {
     if (first === undefined || second === undefined) throw new Error('needs two tasks')
     expect(differences(MANIFEST, { ...MANIFEST, tasks: [{ ...first, key: { ...first.key, never: ['a new claim'] } }, second] })).toEqual([`tasks.${first.id}`])
     expect(differences(MANIFEST, { ...MANIFEST, repeats: 2 })).toEqual(['repeats'])
+    // A task read back from disk may hold its fields in another order, which is no difference.
+    expect(differences(MANIFEST, readManifest(JSON.stringify(MANIFEST, (_, v: unknown) => (typeof v === 'object' && v !== null && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).reverse()) : v))))).toEqual([])
   })
 
   test('a manifest and its tasks read back whole, and a malformed one is refused', async () => {
@@ -161,5 +166,27 @@ describe('run manifests and judge answers', () => {
     expect(rowsOf('{"a":1}\n{"a":2}\n{"a":')).toEqual({ rows: [{ a: 1 }, { a: 2 }], isCut: true })
     expect(rowsOf('{"a":1}\n')).toEqual({ rows: [{ a: 1 }], isCut: false })
     expect(() => rowsOf('{"a":1}\n{"a":\n{"a":3}\n')).toThrow('line 2')
+  })
+})
+
+describe('tasks and guide variants', () => {
+  test('every task is well formed: unique ids, items named by words, short tasks without items', async () => {
+    expect(new Set(TASKS.map(t => t.id)).size).toBe(TASKS.length)
+    for (const task of TASKS) {
+      expect([task.id, task.needsNoStretch === true && (task.items?.length ?? 0) > 0]).toEqual([task.id, false])
+      for (const item of task.items ?? []) expect([task.id, item.length > 0 && item.every(word => word.trim() !== '')]).toEqual([task.id, true])
+      expect([task.id, task.key.know.length > 0]).toEqual([task.id, true])
+    }
+    expect(TASKS.filter(t => t.heldOut === true).map(t => t.id)).toEqual(['search-options-zh', 'auth-options', 'parser-status'])
+  })
+
+  test('g0 is the plugin guide, and every other variant only adds its own lines after one bullet', async () => {
+    expect(VARIANTS.g0).toBe(GUIDE)
+    for (const [name, text] of Object.entries(VARIANTS)) {
+      const added = ADDED[name] ?? []
+      const rows = text.split('\n')
+      expect([name, rows.filter(row => !GUIDE.split('\n').includes(row))]).toEqual([name, [...added]])
+      expect([name, rows.filter(row => !added.includes(row))]).toEqual([name, GUIDE.split('\n')])
+    }
   })
 })

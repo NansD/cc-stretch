@@ -3,16 +3,16 @@
 // its stretches add words around the short form, how many short forms are only labels, and how many
 // of the reply's must-know points a blind reader of the shortest version still takes away.
 //   bun bench/ab.ts corpus --per-project 15 <~/.claude/projects/<dir>>...      freezes bench/out/corpus.jsonl
-//   bun bench/ab.ts run --out <dir> --arm <name>=<guide file>... [--repeats 3] [--writer haiku]
+//   bun bench/ab.ts run --out <dir> --arm <variant>... [--repeats 3] [--writer haiku]
 //                        [--judge haiku] [--effort <level>] [--concurrency 4] [--limit n]
 //   bun bench/ab.ts report --out <dir>                                          prints the comparison
 // The tasks commands compare guides on replies written from scratch instead: each arm answers every
 // task in tasks.ts, and a judge checks each answer, closed and open, against the task's key. Haiku
 // writes no stretch unless a prompt asks for them (as of Claude Code 2.1.301), so it cannot write here.
-//   bun bench/ab.ts tasks --out <dir> --arm <name>=<guide file>... [--repeats 1] [--writer opus]
+//   bun bench/ab.ts tasks --out <dir> --arm <variant>... [--repeats 1] [--writer opus]
 //                         [--judge haiku] [--effort <level>] [--concurrency 4] [--limit n]
 //   bun bench/ab.ts tasks-report --out <dir>                                    prints the comparison
-// A run's first start freezes its inputs in <dir>/manifest.json; a later start with the same inputs
+// An arm is a guide variant named in guides.ts. A run's first start freezes its inputs in <dir>/manifest.json; a later start with the same inputs
 // resumes where it stopped, and one with any other input is refused before a single call.
 // Calls `claude -p` in safe mode, so the person's own CLAUDE.md files, skills and plugins stay out.
 // Runs under bun, as the plugin's hooks import each other without file extensions. Raw text stays in
@@ -24,11 +24,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { growthOf } from '../hooks/grow.ts'
 import { drawnAs, parse, stretches } from '../hooks/parse.ts'
+import { VARIANTS } from './guides.ts'
 import { ANSWER, CHECK, claimsOf, gradesOf, KEY, LABELS, POINTS, READ, readChecks, readKey, readLabels, readPoints, resultOf, REWRITE } from './grading.ts'
 import type { Claim, Grade } from './grading.ts'
 import { differences, readManifest, rowsOf } from './manifest.ts'
 import type { Manifest } from './manifest.ts'
 import { draw, render, words } from './measure.ts'
+import { verdictsOf } from './rules.ts'
+import type { RuleId } from './rules.ts'
 import { TASKS } from './tasks.ts'
 import type { Task } from './tasks.ts'
 import { turnsOf } from './transcripts.ts'
@@ -250,12 +253,11 @@ function corpus() {
   console.log(`froze ${sample.length} replies in bench/out/corpus.jsonl`)
 }
 
+/** The arms asked for, each a guide variant by name; an unknown name stops the run before anything is written. */
 function armsOf() {
-  return takeAll('--arm').map(spec => {
-    const [name, file] = spec.split('=')
-    if (name === undefined || file === undefined) throw new Error(`--arm wants <name>=<guide file>, got ${spec}`)
-    return { name, guide: readFileSync(file, 'utf8') }
-  })
+  const names = takeAll('--arm')
+  if (names.length === 0) fail(`--arm <variant> is required: ${Object.keys(VARIANTS).join(', ')}`)
+  return names.map(name => ({ name, guide: VARIANTS[name] ?? fail(`--arm ${name} is no guide variant; guides.ts has ${Object.keys(VARIANTS).join(', ')}`) }))
 }
 
 /** The replies of the frozen corpus, read strictly. */
@@ -531,6 +533,28 @@ function tasksReport() {
     const all = tasks.map(t => cell(arm, t))
     console.log(`- ${arm}: full reply carries ${pct(mean(all.map(c => c.full)))} of all key points; ${pct(all.reduce((a, c) => a + c.rightOnly, 0) / Math.max(1, all.reduce((a, c) => a + c.allStretches, 0)))} of stretches only add words after the short form`)
   }
+
+  // Layout rules read only the answers, so they count every task each arm answered in every repeat.
+  const answered = run.tasks.filter(t => arms.every(arm => repeats.every(rep => texts.has(at(arm, rep, t.id)))))
+  const verdicts = new Map(answered.flatMap(t => arms.flatMap(arm => repeats.map(rep => [at(arm, rep, t.id), verdictsOf(texts.get(at(arm, rep, t.id)) ?? '', t)] as const))))
+  const ruleTable = (title: string, set: Task[]) => {
+    if (set.length === 0) return
+    const ids: RuleId[] = [...new Set(set.flatMap(t => verdicts.get(at(arms[0] ?? '', 1, t.id))?.map(v => v.rule) ?? []))]
+    console.log(`\n${title}: answers that break each rule, of those it applies to\n\n| rule | ${arms.join(' | ')} |\n|${'---|'.repeat(arms.length + 1)}`)
+    for (const rule of ids) {
+      const cells = arms.map(arm => {
+        const found = set.flatMap(t => repeats.flatMap(rep => verdicts.get(at(arm, rep, t.id))?.filter(v => v.rule === rule) ?? []))
+        return `${found.filter(v => !v.holds).length} / ${found.length}`
+      })
+      console.log(`| ${rule} | ${cells.join(' | ')} |`)
+    }
+  }
+  console.log(`\n${answered.length} of ${run.tasks.length} tasks answered in every arm and repeat`)
+  ruleTable('Layout rules, tasks for choosing a guide', answered.filter(t => t.heldOut !== true))
+  ruleTable('Layout rules, held-out tasks', answered.filter(t => t.heldOut === true))
+  const broken: string[] = []
+  for (const [k, found] of verdicts) for (const v of found) if (!v.holds) broken.push(`- ${k.replaceAll('|', ', ')}: ${v.rule}, ${v.evidence}`)
+  if (broken.length > 0) console.log(`\nEach broken rule:\n\n${broken.join('\n')}`)
 
   // A claim the key forbids, in what the reader sees, is a material error whatever the full reply says.
   console.log('\nForbidden claims made (each one blocks adopting its guide until a person has read it):\n')

@@ -7,11 +7,12 @@
 // The tasks are invented, and differ on purpose: a reply that needs no stretch, a negative answer,
 // an unproved fix, an untested environment, a limited scope, a destructive command, a required
 // order, several actions, an answer that is mostly code, a diagnosis, a decision and a status.
+// The tasks after those ask, in ordinary words, for answers that are lists, where a guide without a
+// rule for lists hid the whole list in one stretch; one rewrites a given reply instead. Held-out
+// tasks are kept out of choosing a guide, so a report can show how the choice does on unseen ones.
 
 export type Task = {
   id: string
-  question: string
-  evidence: string
   key: { know: string[]; defer: string[]; never: string[] }
   /** The items a good answer lists, each one visible with a stretch of its own; each item is the words that name it. */
   items?: string[][]
@@ -19,7 +20,14 @@ export type Task = {
   needsNoStretch?: true
   /** The person's instruction that requires a closing block, which the answer must make its last stretch. */
   closing?: string
-}
+  /** Kept out of choosing a guide. */
+  heldOut?: true
+} & (
+  /** A question, and the evidence the writer may use. */
+  | { kind?: 'question'; question: string; evidence: string }
+  /** A reply written before stretches, for the writer to rewrite with them. */
+  | { kind: 'rewrite'; reply: string }
+)
 
 /** The fields of a task the layout rules read. */
 export type Layout = Pick<Task, 'items' | 'needsNoStretch' | 'closing'>
@@ -28,31 +36,43 @@ export type Layout = Pick<Task, 'items' | 'needsNoStretch' | 'closing'>
 export function readTask(value: unknown): Task {
   const get = (from: unknown, key: string): unknown => (typeof from === 'object' && from !== null ? Reflect.get(from, key) : undefined)
   const strings = (from: unknown): string[] | undefined => (Array.isArray(from) && from.every(s => typeof s === 'string') ? from : undefined)
-  const id = get(value, 'id'), question = get(value, 'question'), evidence = get(value, 'evidence'), key = get(value, 'key')
+  const [id, kind, question, evidence, reply, key] = ['id', 'kind', 'question', 'evidence', 'reply', 'key'].map(name => get(value, name))
   const know = strings(get(key, 'know')), defer = strings(get(key, 'defer')), never = strings(get(key, 'never'))
-  const items = get(value, 'items'), needsNoStretch = get(value, 'needsNoStretch'), closing = get(value, 'closing')
+  const [items, needsNoStretch, closing, heldOut] = ['items', 'needsNoStretch', 'closing', 'heldOut'].map(name => get(value, name))
   const itemList = Array.isArray(items) ? items.map(strings) : undefined
-  if (typeof id !== 'string' || typeof question !== 'string' || typeof evidence !== 'string' || know === undefined || defer === undefined || never === undefined) {
-    throw new Error(`task ${JSON.stringify(id)} has no question, evidence or key`)
+  if (typeof id !== 'string' || know === undefined || defer === undefined || never === undefined) throw new Error(`task ${JSON.stringify(id)} has no id or key`)
+  if (
+    (items !== undefined && (itemList === undefined || itemList.some(item => item === undefined))) ||
+    (needsNoStretch !== undefined && needsNoStretch !== true) ||
+    (closing !== undefined && typeof closing !== 'string') ||
+    (heldOut !== undefined && heldOut !== true)
+  ) {
+    throw new Error(`task ${id} has a malformed items, needsNoStretch, closing or heldOut`)
   }
-  if ((items !== undefined && (itemList === undefined || itemList.some(item => item === undefined))) || (needsNoStretch !== undefined && needsNoStretch !== true) || (closing !== undefined && typeof closing !== 'string')) {
-    throw new Error(`task ${id} has a malformed items, needsNoStretch or closing`)
-  }
-
-  return {
+  const common = {
     id,
-    question,
-    evidence,
     key: { know, defer, never },
     ...(itemList !== undefined && { items: itemList.flatMap(item => (item === undefined ? [] : [item])) }),
-    ...(needsNoStretch === true && { needsNoStretch }),
+    ...(needsNoStretch === true && { needsNoStretch: true as const }),
     ...(typeof closing === 'string' && { closing }),
+    ...(heldOut === true && { heldOut: true as const }),
   }
+  if (kind === 'rewrite' && typeof reply === 'string') return { ...common, kind, reply }
+  if ((kind === undefined || kind === 'question') && typeof question === 'string' && typeof evidence === 'string') {
+    return { ...common, ...(kind === 'question' && { kind }), question, evidence }
+  }
+  throw new Error(`task ${id} is neither a question with evidence nor a reply to rewrite`)
 }
+
+const KEYBOARD_EVIDENCE =
+  'Treat this supplied capability report as given. Client elements inside a reply accept keyboard events only after a mouse click gives focus; Escape returns focus. A toolbar above the prompt is reachable with Ctrl+X Tab and supports one-letter or digit buttons; Escape returns to typing. A custom keybinding can invoke an existing engine action only when the engine is not handling that action itself, making it fragile. Slash commands such as /stretch open 2 are keyboard-only but require typing a command for each operation.'
+const KEYBOARD_ITEMS = [['client', 'click', 'in-reply'], ['band', 'toolbar'], ['keybinding'], ['slash']]
+const KEYBOARD_POINTS = ['Client needs an initial mouse click.', 'Toolbar is reachable without a mouse.', 'Custom keybindings can conflict with engine actions.', 'Slash commands are keyboard-only but slow.']
 
 export const TASKS: Task[] = [
   {
     id: 'brief',
+    needsNoStretch: true,
     question: 'Which git command shows the last five commits, one line each?',
     evidence: '$ git --version\ngit version 2.50.1',
     key: {
@@ -320,5 +340,70 @@ completed  success  main  "Move sessions to Redis" (3 days ago)`,
       defer: ['#212, moving sessions to Redis, merged 3 days ago.', 'The failing test is "login > remembers this device".'],
       never: ['#218 broke the e2e test.', 'The auth migration is finished.'],
     },
+  },
+  {
+    id: 'keyboard-options',
+    question: 'Could we make reply navigation keyboard-only? What does the API give us?',
+    evidence: KEYBOARD_EVIDENCE,
+    items: KEYBOARD_ITEMS,
+    key: { know: KEYBOARD_POINTS, defer: [], never: [] },
+  },
+  {
+    id: 'cache-options',
+    question: 'What are the tradeoffs among our available cache options?',
+    evidence:
+      'We have three implemented adapters. Memory cache has the lowest latency but is lost on restart and cannot share state across processes. SQLite persists locally and needs no separate service, but replicas cannot share one local file. Redis shares cached data across replicas, but needs a running service and adds a network hop. All three support the same TTL interface; no new adapter needs to be written.',
+    items: [['memory'], ['sqlite'], ['redis']],
+    key: {
+      know: ['Memory is fast but temporary and process-local.', 'SQLite persists locally but is not shared across replicas.', 'Redis shares across replicas but requires a service.'],
+      defer: [],
+      never: [],
+    },
+  },
+  {
+    id: 'keyboard-rewrite',
+    kind: 'rewrite',
+    reply:
+      'What the API offers:\n\n- The reply itself. The plugin draws replies with a Client element, which can listen for keys. But keys reach it only after a click gives it focus, and Esc gives focus back. Inside a reply, arrows, Tab, Enter and Backspace could move between stretches and open or close them, but you need one click to start.\n- A band above the prompt. Focus it with Ctrl+X Tab without the mouse, and its buttons then answer one digit or letter each. Esc returns to the prompt.\n- Your own keybinding. A button can claim an existing engine keybinding action, so the chord you bound in keybindings.json presses it straight from the prompt. Only engine action names are allowed, and only while the engine is not handling that action itself, so it is fragile.\n- Slash commands. Something like /stretch open 2, which is keyboard-only but slow.',
+    items: KEYBOARD_ITEMS,
+    key: { know: KEYBOARD_POINTS, defer: [], never: [] },
+  },
+  {
+    id: 'export-formats',
+    needsNoStretch: true,
+    question: 'List the three supported export formats. Names only.',
+    evidence: 'The application exports CSV, JSON, and Parquet.',
+    key: { know: ['The formats are CSV, JSON and Parquet.'], defer: [], never: [] },
+  },
+  {
+    id: 'search-options-zh',
+    heldOut: true,
+    question: '列出这三个搜索方案，各自有什么取舍？',
+    evidence: '方案一：前缀搜索，只匹配词开头；延迟最低，但不能找词中间。方案二：全文搜索，支持按相关性排序；适合文章，但默认不保证任意子串匹配。方案三：三元组搜索，支持子串和近似拼写；索引较大，写入也更慢。',
+    items: [['前缀'], ['全文'], ['三元组']],
+    key: { know: ['前缀搜索快，但不匹配词中间。', '全文搜索适合文章相关性，不保证任意子串。', '三元组支持子串和近似拼写，但索引大、写入慢。'], defer: [], never: [] },
+  },
+  {
+    id: 'auth-options',
+    heldOut: true,
+    question: 'List the three authentication approaches and explain the tradeoffs. Include the implementation notes where they help.',
+    evidence:
+      'Sessions store a random token in a cookie and its state on the server; immediate revocation is easy, but every request needs a state lookup. Implementation notes: rotate the token at login, expire it on logout. Signed bearer tokens can be verified without a database lookup, but revocation needs extra state or waiting for expiry. Implementation notes: verify issuer and audience, keep expiry short. API keys suit scripts and service accounts, but copied keys remain usable until revoked. Implementation notes: store only hashes, support per-key revocation.',
+    items: [['session'], ['signed', 'bearer', 'jwt'], ['api key']],
+    key: {
+      know: ['Sessions offer immediate revocation but require server state.', 'Signed tokens avoid lookups but complicate revocation.', 'API keys suit automation but copied keys work until revoked.'],
+      defer: [],
+      never: [],
+    },
+  },
+  {
+    id: 'parser-status',
+    heldOut: true,
+    question: 'Give me a bulleted update on the parser, renderer, and export work. End with the required status block.',
+    closing: 'A closing status block is required: a horizontal rule, a Done line, a Next line, and a closing horizontal rule.',
+    evidence:
+      'Parser work is merged and the malformed-input test passes. The renderer change compiles, but nobody has tested resize behavior in a running app. Export work is blocked because the downstream CSV column order has not been agreed; the next step is to obtain that contract. There is no release yet.',
+    items: [['parser'], ['renderer'], ['export']],
+    key: { know: ['Parser merged and malformed-input test passed.', 'Renderer resize remains untested.', 'Export is blocked on CSV column order.'], defer: [], never: [] },
   },
 ]

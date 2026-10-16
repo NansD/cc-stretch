@@ -156,6 +156,8 @@ function read(text: string): Read {
 /**
  * Which items are hidden or share a stretch: every item must be named in the skim, and the items
  * must pair one to one with distinct links that add words, each on a skim line naming its item.
+ * Where links on such a line name the item in their short form, the item pairs only with those, so
+ * a stretch about something else is not taken for the item's own.
  */
 function missingItems({ skim, links }: Read, items: string[][]): string | undefined {
   const names = (item: string[], line: string) => item.some(word => unmarked(line).toLowerCase().includes(word.toLowerCase()))
@@ -163,10 +165,17 @@ function missingItems({ skim, links }: Read, items: string[][]): string | undefi
   if (hidden.length > 0) return `not in the skim: ${hidden.map(item => item[0] ?? '').join(', ')}`
 
   const candidates = items.map(item =>
-    skim.filter(line => names(item, line)).flatMap(line => [...line.matchAll(/⟪(\d+)⟫/g)].map(m => Number(m[1]))).filter(i => {
-      const link = links[i]
-      return link !== undefined && added(link) > 0
-    }),
+    skim
+      .filter(line => names(item, line))
+      .flatMap(line => {
+        const onLine = [...line.matchAll(/⟪(\d+)⟫/g)].map(m => Number(m[1]))
+        const naming = onLine.filter(i => names(item, links[i]?.short ?? ''))
+        return naming.length > 0 ? naming : onLine
+      })
+      .filter(i => {
+        const link = links[i]
+        return link !== undefined && added(link) > 0
+      }),
   )
   // A one-to-one pairing by augmenting paths, so an item is not refused a link another could spare.
   const holder = new Map<number, number>()

@@ -33,11 +33,18 @@ export function differences(frozen: Manifest, current: Manifest): string[] {
       const named = (value: unknown) => new Map(Array.isArray(value) ? value.map(task => [String(Reflect.get(task, 'id')), task]) : Object.entries(value ?? {}))
       const before = named(a), after = named(b)
       for (const name of [...new Set([...before.keys(), ...after.keys()])].sort()) {
-        if (JSON.stringify(before.get(name)) !== JSON.stringify(after.get(name))) paths.push(`${key}.${name}`)
+        if (canonical(before.get(name)) !== canonical(after.get(name))) paths.push(`${key}.${name}`)
       }
-    } else if (JSON.stringify(a) !== JSON.stringify(b)) paths.push(key)
+    } else if (canonical(a) !== canonical(b)) paths.push(key)
   }
   return paths
+}
+
+/** `value` as JSON with every object's keys sorted, so the order fields were written in never counts. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_, inner: unknown) =>
+    typeof inner === 'object' && inner !== null && !Array.isArray(inner) ? Object.fromEntries(Object.entries(inner).sort(([a], [b]) => a.localeCompare(b))) : inner,
+  )
 }
 
 /** A manifest read back from disk, or an error naming what is wrong with it. */

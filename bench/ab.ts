@@ -12,6 +12,8 @@
 //   bun bench/ab.ts tasks --out <dir> --arm <variant>... [--repeats 1] [--writer opus]
 //                         [--judge haiku] [--effort <level>] [--concurrency 4] [--limit n]
 //   bun bench/ab.ts tasks-report --out <dir>                                    prints the comparison
+//   bun bench/ab.ts override --out <dir> --arm <a> --repeat <n> --task <id> --rule <rule> --holds true|false --reason <why>
+//                                    records a person's verdict on one layout rule for one answer
 // An arm is a guide variant named in guides.ts. A run's first start freezes its inputs in <dir>/manifest.json; a later start with the same inputs
 // resumes where it stopped, and one with any other input is refused before a single call.
 // Calls `claude -p` in safe mode, so the person's own CLAUDE.md files, skills and plugins stay out.
@@ -30,8 +32,8 @@ import type { Claim, Grade } from './grading.ts'
 import { differences, readManifest, rowsOf } from './manifest.ts'
 import type { Manifest } from './manifest.ts'
 import { draw, render, words } from './measure.ts'
-import { verdictsOf } from './rules.ts'
-import type { RuleId } from './rules.ts'
+import { adjudicate, isRuleId, verdictsOf } from './rules.ts'
+import type { Override, RuleId } from './rules.ts'
 import { TASKS } from './tasks.ts'
 import type { Task } from './tasks.ts'
 import { turnsOf } from './transcripts.ts'
@@ -454,6 +456,34 @@ async function runTasks() {
   await runJobs(jobs, concurrency)
 }
 
+/** The overrides recorded in a run, by answer; a malformed row is an error, not a silent skip. */
+function overridesIn(out: string): Map<string, Override[]> {
+  const found = new Map<string, Override[]>()
+  for (const row of rows(join(out, 'overrides.jsonl'))) {
+    const rule = String(get(row, 'rule')), holds = get(row, 'holds'), reason = get(row, 'reason'), answer = get(row, 'answer')
+    if (!isRuleId(rule) || typeof holds !== 'boolean' || typeof reason !== 'string' || typeof answer !== 'string') fail(`${join(out, 'overrides.jsonl')}: a row is not an override: ${JSON.stringify(row)}`)
+    else found.set(keyOf(row), [...(found.get(keyOf(row)) ?? []), { rule, holds, reason, answer }])
+  }
+  return found
+}
+
+/** Records a person's verdict on one layout rule for one answer, tied to that answer's text. */
+function override() {
+  const out = take('--out') ?? fail('--out <dir> is required')
+  const run = frozenRun(out)
+  const [arm, repeat, id, rule, holds, reason] = ['--arm', '--repeat', '--task', '--rule', '--holds', '--reason'].map(take)
+  const task = run.tasks?.find(t => t.id === id) ?? fail(`--task ${String(id)} is no task of this run`)
+  if (arm === undefined || repeat === undefined) return fail('--arm and --repeat name the answer')
+  if (rule === undefined || !isRuleId(rule)) return fail(`--rule ${String(rule)} is no layout rule`)
+  if (holds !== 'true' && holds !== 'false') return fail('--holds is true or false')
+  if (reason === undefined || reason.trim() === '') return fail('--reason is required: say why the rule is wrong here')
+  const k = keyOf({ arm, repeat: Number(repeat), id })
+  const text = rows(join(out, 'answers.jsonl')).filter(isOk).filter(row => keyOf(row) === k).map(textOf).at(-1) ?? fail(`no answer from ${arm}, repeat ${repeat}, for ${task.id}`)
+  if (!verdictsOf(text, task).some(v => v.rule === rule)) fail(`${rule} does not apply to ${task.id}`)
+  record(join(out, 'overrides.jsonl'), { arm, repeat: Number(repeat), id: task.id, rule, holds: holds === 'true', reason, at: new Date().toISOString(), answer: sha256(text) })
+  console.log(`recorded: ${rule} ${holds === 'true' ? 'holds' : 'breaks'} for ${arm}, repeat ${repeat}, ${task.id}`)
+}
+
 /** A grade row of a tasks run, read back as strictly as its judge answers were. */
 type Graded = { labels: number; topLevel: number; skim: { know: Grade[]; never: Claim[] }; full: { know: Grade[]; defer: Grade[]; never: Claim[] } }
 
@@ -535,8 +565,13 @@ function tasksReport() {
   }
 
   // Layout rules read only the answers, so they count every task each arm answered in every repeat.
+  // A person's override shows beside the rule's own count, never in its place.
   const answered = run.tasks.filter(t => arms.every(arm => repeats.every(rep => texts.has(at(arm, rep, t.id)))))
-  const verdicts = new Map(answered.flatMap(t => arms.flatMap(arm => repeats.map(rep => [at(arm, rep, t.id), verdictsOf(texts.get(at(arm, rep, t.id)) ?? '', t)] as const))))
+  const overrides = overridesIn(out)
+  const verdicts = new Map(answered.flatMap(t => arms.flatMap(arm => repeats.map(rep => {
+    const k = at(arm, rep, t.id), text = texts.get(k) ?? ''
+    return [k, verdictsOf(text, t).map(v => ({ ...v, adjudicated: adjudicate(v, overrides.get(k) ?? [], sha256(text)) }))] as const
+  }))))
   const ruleTable = (title: string, set: Task[]) => {
     if (set.length === 0) return
     const ids: RuleId[] = [...new Set(set.flatMap(t => verdicts.get(at(arms[0] ?? '', 1, t.id))?.map(v => v.rule) ?? []))]
@@ -544,7 +579,8 @@ function tasksReport() {
     for (const rule of ids) {
       const cells = arms.map(arm => {
         const found = set.flatMap(t => repeats.flatMap(rep => verdicts.get(at(arm, rep, t.id))?.filter(v => v.rule === rule) ?? []))
-        return `${found.filter(v => !v.holds).length} / ${found.length}`
+        const raw = found.filter(v => !v.holds).length, adjudicated = found.filter(v => !v.adjudicated.holds).length
+        return `${raw} / ${found.length}${adjudicated === raw ? '' : `, ${adjudicated} / ${found.length} adjudicated`}`
       })
       console.log(`| ${rule} | ${cells.join(' | ')} |`)
     }
@@ -552,9 +588,18 @@ function tasksReport() {
   console.log(`\n${answered.length} of ${run.tasks.length} tasks answered in every arm and repeat`)
   ruleTable('Layout rules, tasks for choosing a guide', answered.filter(t => t.heldOut !== true))
   ruleTable('Layout rules, held-out tasks', answered.filter(t => t.heldOut === true))
-  const broken: string[] = []
-  for (const [k, found] of verdicts) for (const v of found) if (!v.holds) broken.push(`- ${k.replaceAll('|', ', ')}: ${v.rule}, ${v.evidence}`)
+  const broken: string[] = [], judged: string[] = []
+  for (const [k, found] of verdicts) {
+    const where = k.replaceAll('|', ', ')
+    for (const v of found) {
+      if (!v.holds) broken.push(`- ${where}: ${v.rule}, ${v.evidence}`)
+      const { by, stale } = v.adjudicated
+      if (by !== undefined) judged.push(`- ${where}: ${v.rule} ${by.holds ? 'holds' : 'breaks'}, by a person: ${by.reason}`)
+      for (const o of stale) judged.push(`- ${where}: ${v.rule} ${o.holds ? 'holds' : 'breaks'}, by a person, not applied as the answer changed since: ${o.reason}`)
+    }
+  }
   if (broken.length > 0) console.log(`\nEach broken rule:\n\n${broken.join('\n')}`)
+  if (judged.length > 0) console.log(`\nOverrides:\n\n${judged.join('\n')}`)
 
   // A claim the key forbids, in what the reader sees, is a material error whatever the full reply says.
   console.log('\nForbidden claims made (each one blocks adopting its guide until a person has read it):\n')
@@ -645,4 +690,5 @@ else if (command === 'run') await runAll()
 else if (command === 'report') report()
 else if (command === 'tasks') await runTasks()
 else if (command === 'tasks-report') tasksReport()
-else console.error('usage: bun bench/ab.ts corpus|run|report|tasks|tasks-report ...')
+else if (command === 'override') override()
+else console.error('usage: bun bench/ab.ts corpus|run|report|tasks|tasks-report|override ...')

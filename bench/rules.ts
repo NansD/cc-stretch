@@ -194,3 +194,20 @@ function missingItems({ skim, links }: Read, items: string[][]): string | undefi
 
   return alone.length === 0 ? undefined : `without a stretch of their own: ${alone.map(item => item[0] ?? '').join(', ')}`
 }
+
+/** A person's verdict on one rule for one answer, with their reason, tied to that answer's text by its SHA-256. */
+export type Override = { rule: RuleId; holds: boolean; reason: string; answer: string }
+
+/**
+ * `verdict` as adjudicated: an override counts only for the answer text it was made on, the latest
+ * of several wins, and one made on other text is returned as stale, never applied.
+ */
+export function adjudicate(verdict: RuleVerdict, overrides: readonly Override[], answer: string): { holds: boolean; by?: Override; stale: Override[] } {
+  const mine = overrides.filter(o => o.rule === verdict.rule)
+  const current = mine.filter(o => o.answer === answer)
+  const by = current.at(-1)
+  return { holds: by?.holds ?? verdict.holds, ...(by !== undefined && { by }), stale: mine.filter(o => o.answer !== answer) }
+}
+
+/** Whether `id` names a rule. */
+export const isRuleId = (id: string): id is RuleId => RULES.some(rule => rule.id === id)

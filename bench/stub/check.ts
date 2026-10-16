@@ -90,6 +90,24 @@ check(
   `${r.output}\n${report.output}`,
 )
 
+// A person's override shows beside the rule's own count, only for the answer it was made on.
+const overrideArgs = (task: string, reason: string[]) => ['override', '--out', every, '--arm', 'g7', '--repeat', '1', '--task', task, '--rule', 'items-stay-visible', '--holds', 'true', ...reason]
+r = bench(overrideArgs('keyboard-options', ['--reason', 'the band paragraph names its own option']))
+check('an override is recorded for an answer that exists', r.status === 0 && r.output.includes('recorded'), r.output)
+r = bench(overrideArgs('no-such-task', ['--reason', 'x']))
+const s1 = r.status
+r = bench(overrideArgs('cache-options', []))
+check('an override for no answer, or with no reason, is refused', s1 === 1 && r.status === 1 && r.output.includes('--reason is required'), r.output)
+appendFileSync(join(every, 'overrides.jsonl'), `${JSON.stringify({ arm: 'g7', repeat: 1, id: 'auth-options', rule: 'items-stay-visible', holds: true, reason: 'made on an older answer', at: 'then', answer: 'not-this-text' })}\n`)
+const adjudicated = bench(['tasks-report', '--out', every])
+check(
+  'a report shows raw and adjudicated counts, and every override with its reason',
+  adjudicated.status === 0 && adjudicated.output.includes('| items-stay-visible | 2 / 3, 1 / 3 adjudicated |') &&
+    adjudicated.output.includes('by a person: the band paragraph names its own option') &&
+    adjudicated.output.includes('not applied as the answer changed since: made on an older answer') && adjudicated.output.includes('| items-stay-visible | 3 / 3 |'),
+  adjudicated.output,
+)
+
 // A folder from before manifests, or with an unreadable one, is refused.
 const old = join(scratch, 'old')
 spawnSync('mkdir', ['-p', old])

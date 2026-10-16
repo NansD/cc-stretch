@@ -3,7 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { measure, openedFrom, render, words } from '../bench/measure.ts'
 import { growthOf } from '../hooks/grow.ts'
 import { parse } from '../hooks/parse.ts'
-import { verdictsOf } from '../bench/rules.ts'
+import { adjudicate, verdictsOf } from '../bench/rules.ts'
 import type { RuleId } from '../bench/rules.ts'
 import { readChecks, readKey, readLabels, readPoints, resultOf } from '../bench/grading.ts'
 import { differences, readManifest, rowsOf } from '../bench/manifest.ts'
@@ -188,5 +188,18 @@ describe('tasks and guide variants', () => {
       expect([name, rows.filter(row => !GUIDE.split('\n').includes(row))]).toEqual([name, [...added]])
       expect([name, rows.filter(row => !added.includes(row))]).toEqual([name, GUIDE.split('\n')])
     }
+  })
+})
+
+describe('overrides', () => {
+  const broken = { rule: 'items-stay-visible', holds: false, evidence: 'not in the skim: memory' } as const
+  const override = (holds: boolean, answer: string, reason = 'the toolbar paragraph is its own item') => ({ rule: 'items-stay-visible', holds, reason, answer }) as const
+
+  test('an override applies only to the answer it was made on, and the latest wins', async () => {
+    expect(adjudicate(broken, [], 'hash-1')).toEqual({ holds: false, stale: [] })
+    expect(adjudicate(broken, [override(true, 'hash-1')], 'hash-1')).toEqual({ holds: true, by: override(true, 'hash-1'), stale: [] })
+    expect(adjudicate(broken, [override(true, 'hash-1'), override(false, 'hash-1', 'on a second read, hidden')], 'hash-1').holds).toBe(false)
+    expect(adjudicate(broken, [override(true, 'hash-0')], 'hash-1')).toEqual({ holds: false, stale: [override(true, 'hash-0')] })
+    expect(adjudicate({ ...broken, rule: 'adds-words' }, [override(true, 'hash-1')], 'hash-1')).toEqual({ holds: false, stale: [] })
   })
 })

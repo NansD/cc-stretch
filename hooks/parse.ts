@@ -33,6 +33,15 @@ export function isLinkable(stretch: Stretch): boolean {
 }
 
 /**
+ * How the terminal draws a stretch: as plain text when there is nothing to open, already open when
+ * its short form spans lines, otherwise as a link.
+ */
+export function drawnAs(stretch: Stretch): 'text' | 'open' | 'link' {
+  if (!isOpenable(stretch)) return 'text'
+  return isLinkable(stretch) ? 'link' : 'open'
+}
+
+/**
  * An open stretch's long form followed by its `closer`, after a space, or after `gap` when the long
  * form ends in a line text after it would change: a rule, which then reads as plain dashes, or a code
  * fence, which then no longer closes.

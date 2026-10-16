@@ -2,21 +2,34 @@
 //   skim  every stretch closed: the reply as it first appears
 //   full  every stretch open: everything the model wrote
 //   read  the stretches the reader actually opened, and nothing else
-import { parse } from '../hooks/parse.ts'
+import { drawnAs, parse } from '../hooks/parse.ts'
 import type { Segment } from '../hooks/parse.ts'
 
 /** The reply's text with the stretches whose short form is in `opened` open (all of them for 'all'). */
 export function render(reply: string, opened: ReadonlySet<string> | 'all'): string {
-  const write = (parts: Segment[]): string =>
-    parts
-      .map(part => {
-        if (typeof part === 'string') return part
-        if (part.long === undefined || !part.isClosed) return part.short
-        const isOpen = opened === 'all' || opened.has(part.short.trim())
-        return isOpen ? write(part.long) : part.short
-      })
-      .join('')
-  return write(parse(reply))
+  return draw(parse(reply), opened)
+}
+
+/**
+ * `parts` as the terminal draws them, with the stretches whose short form is in `opened` open. A
+ * short form over several lines is drawn open whatever is opened, or as written when its long form
+ * is empty.
+ */
+export function draw(parts: Segment[], opened: ReadonlySet<string> | 'all'): string {
+  return parts
+    .map(part => {
+      if (typeof part === 'string') return part
+      const long = part.long ?? []
+      switch (drawnAs(part)) {
+        case 'text':
+          return part.short
+        case 'open':
+          return long.length === 0 ? part.short : draw(long, opened)
+        case 'link':
+          return opened === 'all' || opened.has(part.short.trim()) ? draw(long, opened) : part.short
+      }
+    })
+    .join('')
 }
 
 /** Words a person reads: whitespace-separated tokens holding a letter or a digit. */

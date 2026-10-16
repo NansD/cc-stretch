@@ -57,6 +57,28 @@ export function grow(
   return out
 }
 
+/**
+ * Where a long form's added words and nested stretches land around the short form's words: before
+ * the first, between two, or after the last (all of them, when the short form has none in it).
+ */
+export function growthOf(short: string, long: Segment[]): Record<Side, number> {
+  const tokens = tokenize(long)
+  const anchors = anchorsOf(short, tokens)
+  const counts: Record<Side, number> = { before: 0, between: 0, after: 0 }
+  let run = 0
+  let hasAnchorBefore = false
+  tokens.forEach((token, i) => {
+    if (anchors.has(i) && token.kind !== 'space') {
+      counts[hasAnchorBefore ? 'between' : 'before'] += run
+      run = 0
+      hasAnchorBefore = true
+    } else if (token.kind !== 'space') run += 1
+  })
+  counts.after += run
+
+  return counts
+}
+
 /** How many words and nested stretches a growth adds, to pace it. */
 export function lengthOf(long: Segment[]): number {
   return tokenize(long).filter(token => token.kind !== 'space').length

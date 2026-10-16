@@ -3,7 +3,7 @@
 //   full  every stretch open: everything the model wrote
 //   read  the stretches the reader actually opened, and nothing else
 import { drawnAs, parse } from '../hooks/parse.ts'
-import type { Segment } from '../hooks/parse.ts'
+import type { Segment, Stretch } from '../hooks/parse.ts'
 
 /** The reply's text with the stretches whose short form is in `opened` open (all of them for 'all'). */
 export function render(reply: string, opened: ReadonlySet<string> | 'all'): string {
@@ -13,9 +13,9 @@ export function render(reply: string, opened: ReadonlySet<string> | 'all'): stri
 /**
  * `parts` as the terminal draws them, with the stretches whose short form is in `opened` open. A
  * short form over several lines is drawn open whatever is opened, or as written when its long form
- * is empty.
+ * is empty. `mark`, when given, wraps the text drawn in each link's place, open or closed.
  */
-export function draw(parts: Segment[], opened: ReadonlySet<string> | 'all'): string {
+export function draw(parts: Segment[], opened: ReadonlySet<string> | 'all', mark = (_: Stretch, drawn: string) => drawn): string {
   return parts
     .map(part => {
       if (typeof part === 'string') return part
@@ -24,9 +24,10 @@ export function draw(parts: Segment[], opened: ReadonlySet<string> | 'all'): str
         case 'text':
           return part.short
         case 'open':
-          return long.length === 0 ? part.short : draw(long, opened)
-        case 'link':
-          return opened === 'all' || opened.has(part.short.trim()) ? draw(long, opened) : part.short
+          return long.length === 0 ? part.short : draw(long, opened, mark)
+        case 'link': {
+          return mark(part, opened === 'all' || opened.has(part.short.trim()) ? draw(long, opened, mark) : part.short)
+        }
       }
     })
     .join('')

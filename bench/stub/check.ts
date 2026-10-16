@@ -3,7 +3,7 @@
 //   bun bench/stub/check.ts
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -16,8 +16,8 @@ function bench(args: string[], env: Record<string, string> = {}) {
   const run = spawnSync('bun', [AB, ...args], { encoding: 'utf8', env: { ...process.env, ...env, PATH: `${STUB}:${process.env.PATH ?? ''}` } })
   return { status: run.status, output: `${run.stdout}${run.stderr}` }
 }
-const tasks = (out: string, arm = 'g0', env: Record<string, string> = {}, limit = ['--limit', '2']) =>
-  bench(['tasks', '--out', out, '--arm', arm, ...limit, '--writer', 'opus', '--judge', 'haiku', '--concurrency', '4'], env)
+const tasks = (out: string, arm = 'g0', env: Record<string, string> = {}, limit = ['--limit', '2'], concurrency = '4') =>
+  bench(['tasks', '--out', out, '--arm', arm, ...limit, '--writer', 'opus', '--judge', 'haiku', '--concurrency', concurrency], env)
 const rowsIn = (out: string, file: string) =>
   readFileSync(join(out, file), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as { status: string; reason?: string })
 const snapshot = (out: string) =>
@@ -70,6 +70,25 @@ check('a refused writer call leaves a failure row', r.status === 1 && rowsIn(cha
 r = tasks(changed, 'g0', { STUB_RESOLVE: '-v2' })
 check('a writer answering as another model stops the run', r.status === 1 && rowsIn(changed, 'answers.jsonl').some(row => row.reason?.startsWith('model changed') === true), r.output)
 
+// A call answered by another model stops the run there: the jobs after it are not started.
+const halt = join(scratch, 'halt')
+tasks(halt, 'g0', { STUB_FAIL_MATCH: 'parseDate|flaky upload' }, ['--limit', '3'])
+r = tasks(halt, 'g0', { STUB_RESOLVE: '-v2' }, ['--limit', '3'], '1')
+check('a model change stops the run before its other jobs', r.status === 1 && r.output.includes('stopped: a model changed') && r.output.includes('0 of 2 jobs finished'), r.output)
+
+// A resume cuts away a last line left by an interrupted write before appending, so its rows stay readable.
+const cut = join(scratch, 'cut')
+tasks(cut, 'g0', { STUB_JUDGE: 'key' })
+appendFileSync(join(cut, 'graded.jsonl'), '{"arm":"g0","repeat":1,"id":"cut')
+r = tasks(cut)
+const cutReport = bench(['tasks-report', '--out', cut])
+check('a resume after a cut line grades on, and its folder still reads', r.status === 0 && r.output.includes('dropped its last line') && cutReport.status === 0 && cutReport.output.includes('2 of 2 tasks graded'), `${r.output}\n${cutReport.output}`)
+
+// A flag that is misspelt, or a count that is not a whole number of at least 1, stops before anything runs.
+const typo = bench(['tasks', '--out', join(scratch, 'typo'), '--arm', 'g0', '--repeat', '2'])
+const zero = bench(['tasks', '--out', join(scratch, 'zero'), '--arm', 'g0', '--concurrency', '0'])
+check('a misspelt flag or a zero count is refused before anything is written', typo.status === 1 && typo.output.includes('--repeat') && zero.status === 1 && zero.output.includes('whole number') && !readdirSync(scratch).includes('typo') && !readdirSync(scratch).includes('zero'), `${typo.output}\n${zero.output}`)
+
 // A report skips a last line cut short by an interrupted write, and says so.
 appendFileSync(join(fresh, 'answers.jsonl'), '{"arm":"a","repeat":1,"id":"cut')
 r = bench(['tasks-report', '--out', fresh])
@@ -85,7 +104,7 @@ check(
   'a report counts each layout rule per arm, held-out tasks apart',
   r.status === 0 && report.status === 0 &&
     report.output.includes('Layout rules, tasks for choosing a guide') && report.output.includes('Layout rules, held-out tasks') &&
-    report.output.includes('| no-stretch-when-short | 2 / 2 |') && report.output.includes('| items-stay-visible | 2 / 3 |') &&
+    report.output.includes('| no-stretch-in-short-reply | 2 / 2 |') && report.output.includes('| items-stay-visible | 2 / 3 |') &&
     report.output.includes('| items-stay-visible | 3 / 3 |') && !report.output.includes('g7, 1, cache-options: items-stay-visible'),
   `${r.output}\n${report.output}`,
 )
@@ -97,7 +116,8 @@ check('an override is recorded for an answer that exists', r.status === 0 && r.o
 r = bench(overrideArgs('no-such-task', ['--reason', 'x']))
 const s1 = r.status
 r = bench(overrideArgs('cache-options', []))
-check('an override for no answer, or with no reason, is refused', s1 === 1 && r.status === 1 && r.output.includes('--reason is required'), r.output)
+const noRepeat = bench(['override', '--out', every, '--arm', 'g7', '--task', 'cache-options', '--rule', 'items-stay-visible', '--holds', 'true', '--reason', 'x'])
+check('an override for no answer, with no reason, or with no repeat, is refused', s1 === 1 && r.status === 1 && r.output.includes('--reason is required') && noRepeat.status === 1 && noRepeat.output.includes('--repeat'), `${r.output}\n${noRepeat.output}`)
 appendFileSync(join(every, 'overrides.jsonl'), `${JSON.stringify({ arm: 'g7', repeat: 1, id: 'auth-options', rule: 'items-stay-visible', holds: true, reason: 'made on an older answer', at: 'then', answer: 'not-this-text' })}\n`)
 const adjudicated = bench(['tasks-report', '--out', every])
 check(
@@ -110,12 +130,12 @@ check(
 
 // A folder from before manifests, or with an unreadable one, is refused.
 const old = join(scratch, 'old')
-spawnSync('mkdir', ['-p', old])
+mkdirSync(old)
 writeFileSync(join(old, 'answers.jsonl'), '{"arm":"a","repeat":1,"id":"brief","text":"x"}\n')
 r = tasks(old)
 check('a folder holding rows but no manifest is refused', r.status === 1 && r.output.includes('before run manifests'), r.output)
 const broken = join(scratch, 'broken')
-spawnSync('mkdir', ['-p', broken])
+mkdirSync(broken)
 writeFileSync(join(broken, 'manifest.json'), '{"command":"tasks"}')
 r = tasks(broken)
 check('an unreadable manifest is refused', r.status === 1 && r.output.includes('not a guide bench manifest'), r.output)

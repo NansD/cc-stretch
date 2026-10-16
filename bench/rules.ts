@@ -12,10 +12,10 @@ import type { Layout } from './tasks.ts'
 
 export type RuleId =
   | 'keeps-short-words'
-  | 'inline-short'
+  | 'short-form-inline'
   | 'adds-words'
   | 'not-in-heading-or-table'
-  | 'no-stretch-when-short'
+  | 'no-stretch-in-short-reply'
   | 'items-stay-visible'
   | 'closing-block-last'
 
@@ -51,7 +51,7 @@ export const RULES: readonly Rule[] = [
     },
   },
   {
-    id: 'inline-short',
+    id: 'short-form-inline',
     bullet: 'The short form is plain inline text on one line.',
     appliesTo: () => true,
     breach: ({ all }) => {
@@ -78,7 +78,7 @@ export const RULES: readonly Rule[] = [
     },
   },
   {
-    id: 'no-stretch-when-short',
+    id: 'no-stretch-in-short-reply',
     bullet: 'A reply that is already short needs no stretches.',
     appliesTo: task => task.needsNoStretch === true,
     breach: ({ all }) => {
@@ -100,8 +100,8 @@ export const RULES: readonly Rule[] = [
       const last = [...parts].reverse().find(part => typeof part !== 'string' || part.trim() !== '')
       if (last === undefined || typeof last === 'string') return 'the reply does not end in a stretch'
       if (drawnAs(last) !== 'link') return `the reply ends in ${quoted(last.short)}, which is not a link`
-      const rules = draw(last.long ?? [], 'all').split('\n').filter(isRule).length
-      return rules >= 2 ? undefined : `the last stretch, ${quoted(last.short)}, holds no block between two rules`
+      const dividers = draw(last.long ?? [], 'all').split('\n').filter(isRule).length
+      return dividers >= 2 ? undefined : `the last stretch, ${quoted(last.short)}, holds no block between two rules`
     },
   },
 ]
@@ -122,35 +122,15 @@ const unmarked = (line: string) => line.replace(/⟪\/?\d+⟫/g, '')
 function read(text: string): Read {
   const parts = parse(text)
   const links: Stretch[] = []
-  const mark = (s: Stretch, inner: string) => {
-    links.push(s)
-    return `⟪${links.length - 1}⟫${inner}⟪/${links.length - 1}⟫`
+  const mark = (link: Stretch, drawn: string) => {
+    links.push(link)
+    return `⟪${links.length - 1}⟫${drawn}⟪/${links.length - 1}⟫`
   }
   // The skim marks the links in view; the full text opens every link and marks where each stood.
-  const skim = (segments: Segment[]): string =>
-    segments
-      .map(part => {
-        if (typeof part === 'string') return part
-        const kind = drawnAs(part)
-        if (kind === 'text') return part.short
-        if (kind === 'open') return (part.long ?? []).length === 0 ? part.short : skim(part.long ?? [])
-        return mark(part, part.short)
-      })
-      .join('')
-  const full = (segments: Segment[]): string =>
-    segments
-      .map(part => {
-        if (typeof part === 'string') return part
-        const kind = drawnAs(part)
-        if (kind === 'text') return part.short
-        if (kind === 'open') return (part.long ?? []).length === 0 ? part.short : full(part.long ?? [])
-        return mark(part, full(part.long ?? []))
-      })
-      .join('')
-  const skimLines = skim(parts).split('\n')
-  const fullLines = full(parts).split('\n')
+  const skim = draw(parts, new Set(), mark).split('\n')
+  const full = draw(parts, 'all', mark).split('\n')
 
-  return { parts, all: stretches(parts), links, skim: skimLines, full: fullLines }
+  return { parts, all: stretches(parts), links, skim, full }
 }
 
 /**
@@ -196,17 +176,16 @@ function missingItems({ skim, links }: Read, items: string[][]): string | undefi
 }
 
 /** A person's verdict on one rule for one answer, with their reason, tied to that answer's text by its SHA-256. */
-export type Override = { rule: RuleId; holds: boolean; reason: string; answer: string }
+export type Override = { rule: RuleId; holds: boolean; reason: string; answerSha256: string }
 
 /**
  * `verdict` as adjudicated: an override counts only for the answer text it was made on, the latest
  * of several wins, and one made on other text is returned as stale, never applied.
  */
-export function adjudicate(verdict: RuleVerdict, overrides: readonly Override[], answer: string): { holds: boolean; by?: Override; stale: Override[] } {
+export function adjudicate(verdict: RuleVerdict, overrides: readonly Override[], answerSha256: string): { holds: boolean; by?: Override; stale: Override[] } {
   const mine = overrides.filter(o => o.rule === verdict.rule)
-  const current = mine.filter(o => o.answer === answer)
-  const by = current.at(-1)
-  return { holds: by?.holds ?? verdict.holds, ...(by !== undefined && { by }), stale: mine.filter(o => o.answer !== answer) }
+  const by = mine.filter(o => o.answerSha256 === answerSha256).at(-1)
+  return { holds: by?.holds ?? verdict.holds, ...(by !== undefined && { by }), stale: mine.filter(o => o.answerSha256 !== answerSha256) }
 }
 
 /** Whether `id` names a rule. */

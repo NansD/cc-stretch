@@ -3,6 +3,7 @@
 // must-know points, reads a skim, and grades text against a key. Every judge answer is read
 // strictly: a wrong count or a word outside the expected set throws, so a confused judge becomes a
 // failed call that a resume retries, never a grade.
+import { stringsOf } from './tasks.ts'
 import type { Task } from './tasks.ts'
 
 export const REWRITE = (reply: string) =>
@@ -43,11 +44,12 @@ const CLAIMS: readonly Claim[] = ['yes', 'no']
 const LABEL_KINDS: readonly Label[] = ['gist', 'label']
 
 /** A reply's must-know points: one to eight sentences. */
-export function readPoints(answer: string): string[] {
-  const points = field(objectIn(answer), 'points')
-  if (!Array.isArray(points) || points.length === 0 || points.length > 8 || !points.every(p => typeof p === 'string' && p.trim() !== '')) {
-    throw new Error('the judge gave no list of one to eight points')
-  }
+export const readPoints = (answer: string): string[] => pointsOf(field(objectIn(answer), 'points'))
+
+/** Points as a judge gave them or a run saved them, held to the same shape. */
+export function pointsOf(value: unknown): string[] {
+  const points = stringsOf(value)
+  if (points === undefined || points.length === 0 || points.length > 8 || points.some(p => p.trim() === '')) throw new Error('the judge gave no list of one to eight points')
   return points
 }
 

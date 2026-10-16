@@ -4,7 +4,7 @@
 // item of a three-item list, and a judge with the JSON each prompt asks for, as Claude Code 2.1.301
 // prints it: a list of events whose result event holds the answer and names the model.
 //   STUB_JUDGE=key|labels    the judge answers "maybe" for each key verdict, or each label
-//   STUB_FAIL_MATCH=<text>   a prompt holding <text> fails, as a refused request does
+//   STUB_FAIL_MATCH=<regex>  a prompt matching <regex> fails, as a refused request does
 //   STUB_RESOLVE=<suffix>    the model each call resolves to gets <suffix>, as after a model update
 //   STUB_VERSION=<text>      what `claude --version` prints
 const args = process.argv.slice(2)
@@ -18,7 +18,7 @@ const count = tag => (new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`).exec(pro
 const verdicts = (n, word, garbled) => Array.from({ length: n }, () => (process.env.STUB_JUDGE === garbled ? 'maybe' : word))
 
 let answer
-if (process.env.STUB_FAIL_MATCH !== undefined && prompt.includes(process.env.STUB_FAIL_MATCH)) answer = undefined
+if (process.env.STUB_FAIL_MATCH !== undefined && new RegExp(process.env.STUB_FAIL_MATCH).test(prompt)) answer = undefined
 else if (prompt.includes('Output only JSON of the form {"points"')) answer = JSON.stringify({ points: ['Memory is fast.', 'Redis is shared.'] })
 else if (prompt.includes('Write down, as a short numbered list')) answer = '1. Memory is fast.\n2. Redis is shared.'
 else if (prompt.includes('{"verdicts":["yes","no"]}')) answer = JSON.stringify({ verdicts: verdicts(count('points'), 'yes', 'key') })

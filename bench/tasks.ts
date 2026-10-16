@@ -32,10 +32,13 @@ export type Task = {
 /** The fields of a task the layout rules read. */
 export type Layout = Pick<Task, 'items' | 'needsNoStretch' | 'closing'>
 
+/** `value` when it is a list of strings. */
+export const stringsOf = (value: unknown): string[] | undefined => (Array.isArray(value) && value.every((s): s is string => typeof s === 'string') ? value : undefined)
+
 /** A task read back from a run's manifest, or an error naming the field that is wrong. */
 export function readTask(value: unknown): Task {
   const get = (from: unknown, key: string): unknown => (typeof from === 'object' && from !== null ? Reflect.get(from, key) : undefined)
-  const strings = (from: unknown): string[] | undefined => (Array.isArray(from) && from.every(s => typeof s === 'string') ? from : undefined)
+  const strings = stringsOf
   const [id, kind, question, evidence, reply, key] = ['id', 'kind', 'question', 'evidence', 'reply', 'key'].map(name => get(value, name))
   const know = strings(get(key, 'know')), defer = strings(get(key, 'defer')), never = strings(get(key, 'never'))
   const [items, needsNoStretch, closing, heldOut] = ['items', 'needsNoStretch', 'closing', 'heldOut'].map(name => get(value, name))

@@ -66,8 +66,8 @@ describe('layout rules', () => {
     ])
   })
 
-  test('inline-short: the short form is one plain line', async () => {
-    cases('inline-short', {}, ['A {{first line\nsecond line|both lines, opened}} b.', '{{- Memory is temporary.|- Memory is temporary and resets on restart.}}', '{{## Setup|## Setup, step by step}}'], [
+  test('short-form-inline: the short form is one plain line', async () => {
+    cases('short-form-inline', {}, ['A {{first line\nsecond line|both lines, opened}} b.', '{{- Memory is temporary.|- Memory is temporary and resets on restart.}}', '{{## Setup|## Setup, step by step}}'], [
       'Run {{`npm test` first|`npm test` first, then the build}}.',
     ])
   })
@@ -84,8 +84,8 @@ describe('layout rules', () => {
     ])
   })
 
-  test('no-stretch-when-short: a short answer has no stretch', async () => {
-    cases('no-stretch-when-short', { needsNoStretch: true }, ['{{Use git log.|Use git log --oneline -5.}}'], ['git log --oneline -5', 'CSV, JSON, Parquet'])
+  test('no-stretch-in-short-reply: a short answer has no stretch', async () => {
+    cases('no-stretch-in-short-reply', { needsNoStretch: true }, ['{{Use git log.|Use git log --oneline -5.}}'], ['git log --oneline -5', 'CSV, JSON, Parquet'])
   })
 
   test('items-stay-visible: each list item stays in view with a stretch of its own', async () => {
@@ -114,19 +114,19 @@ describe('layout rules', () => {
   })
 
   test('a rule a task does not ask for is not checked', async () => {
-    expect(verdictsOf('git log', {}).map(v => v.rule)).toEqual(['keeps-short-words', 'inline-short', 'adds-words', 'not-in-heading-or-table'])
+    expect(verdictsOf('git log', {}).map(v => v.rule)).toEqual(['keeps-short-words', 'short-form-inline', 'adds-words', 'not-in-heading-or-table'])
   })
 })
 
 describe('run manifests and judge answers', () => {
   const MANIFEST: Manifest = {
     command: 'tasks', repeats: 1, writer: 'opus', judge: 'haiku', effort: 'default',
-    arms: { a: 'aaa', b: 'bbb' }, tasks: TASKS.slice(0, 2), claude: '2.1.301 (Claude Code)', revision: { commit: 'c1', isDirty: false },
+    arms: { a: 'aaa', b: 'bbb' }, tasks: TASKS.slice(0, 2), claude: '2.1.301 (Claude Code)', code: 'c-1', revision: { commit: 'c1', isDirty: false },
   }
 
   test('a manifest differs from another only where an input changed, never by its revision', async () => {
     expect(differences(MANIFEST, { ...MANIFEST, revision: { commit: 'c2', isDirty: true } })).toEqual([])
-    expect(differences(MANIFEST, { ...MANIFEST, arms: { a: 'aaa', b: 'changed' }, judge: 'sonnet', claude: '2.1.302 (Claude Code)' })).toEqual(['arms.b', 'claude', 'judge'])
+    expect(differences(MANIFEST, { ...MANIFEST, arms: { a: 'aaa', b: 'changed' }, judge: 'sonnet', claude: '2.1.302 (Claude Code)', code: 'c-2' })).toEqual(['arms.b', 'claude', 'code', 'judge'])
     const [first, second] = TASKS
     if (first === undefined || second === undefined) throw new Error('needs two tasks')
     expect(differences(MANIFEST, { ...MANIFEST, tasks: [{ ...first, key: { ...first.key, never: ['a new claim'] } }, second] })).toEqual([`tasks.${first.id}`])
@@ -139,6 +139,7 @@ describe('run manifests and judge answers', () => {
     expect(readManifest(JSON.stringify(MANIFEST))).toEqual(MANIFEST)
     for (const task of TASKS) expect(readTask(JSON.parse(JSON.stringify(task)))).toEqual(task)
     expect(() => readManifest('{"command":"tasks"}')).toThrow('not a guide bench manifest')
+    expect(() => readManifest(JSON.stringify({ ...MANIFEST, tasks: undefined }))).toThrow('holds no tasks')
     expect(() => readTask({ id: 'x', question: 'q', evidence: 'e', key: { know: [], defer: [], never: [1] } })).toThrow()
   })
 
@@ -193,7 +194,7 @@ describe('tasks and guide variants', () => {
 
 describe('overrides', () => {
   const broken = { rule: 'items-stay-visible', holds: false, evidence: 'not in the skim: memory' } as const
-  const override = (holds: boolean, answer: string, reason = 'the toolbar paragraph is its own item') => ({ rule: 'items-stay-visible', holds, reason, answer }) as const
+  const override = (holds: boolean, answerSha256: string, reason = 'the toolbar paragraph is its own item') => ({ rule: 'items-stay-visible', holds, reason, answerSha256 }) as const
 
   test('an override applies only to the answer it was made on, and the latest wins', async () => {
     expect(adjudicate(broken, [], 'hash-1')).toEqual({ holds: false, stale: [] })

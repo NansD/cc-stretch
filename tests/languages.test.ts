@@ -1,8 +1,14 @@
 import { describe, expect, test } from 'claude-code/testing'
 
+import { grow } from '../hooks/grow'
 import { layout, widthOf } from '../hooks/layout'
 
 const rows = (text: string, width: number) => layout(text, width).map(row => row.map(run => run.text).join(''))
+const STEPS = 40
+const frames = (short: string, long: string) => Array.from({ length: STEPS + 1 }, (_, i) => grow(short, [long], i / STEPS, () => ''))
+/** Each `a b` in a frame whose space the long form does not have beside `a` or `b`. */
+const addedSpaces = (shown: string[], long: string) =>
+  shown.flatMap(frame => [...frame.matchAll(/(\S) (?=(\S))/gu)].filter(([, a, b]) => !long.includes(`${a} `) && !long.includes(` ${b}`)))
 
 describe('Chinese', () => {
   test('fills a row before breaking between characters', async () => {
@@ -19,6 +25,17 @@ describe('Chinese', () => {
 
   test('breaks beside a Latin word, never inside it', async () => {
     expect(rows('写给我的Claude看', 10)).toEqual(['写给我的', 'Claude看'])
+  })
+
+  test('grows its long form around its short form over many frames, with no space the long form lacks', async () => {
+    const long = '《道德经》的核心是道，也就是万物运行的根本规律，与人顺着道去做事的无为。'
+    const shown = frames('核心是道，与无为。', long)
+    expect(shown[0]).toBe('核心是道，与无为。')
+    expect(shown.at(-1)).toBe(long)
+    expect(new Set(shown).size).toBeGreaterThan(10)
+    expect(addedSpaces(shown, long)).toEqual([])
+    const mixed = '核心是道，也就是万物运行的 root rule 根本规律，与人顺着道去做事的无为。'
+    expect(addedSpaces(frames('核心是道，与无为。', mixed), mixed)).toEqual([])
   })
 
   test('keeps ASCII punctuation and brackets with the characters they belong to', async () => {
@@ -54,5 +71,14 @@ describe('Thai', () => {
 
   test('breaks between words, which Thai writes without spaces', async () => {
     expect(rows('สวัสดีครับผมชื่อสมชาย', 10)).toEqual(['สวัสดีครับผม', 'ชื่อสมชาย'])
+  })
+
+  test('grows its long form around its short form over many frames', async () => {
+    const long = 'แนวคิดหลักของคัมภีร์นี้คือการใช้ชีวิตตามเต๋า'
+    const shown = frames('แนวคิดหลักคือเต๋า', long)
+    expect(shown[0]).toBe('แนวคิดหลักคือเต๋า')
+    expect(shown.at(-1)).toBe(long)
+    expect(new Set(shown).size).toBeGreaterThan(4)
+    expect(addedSpaces(shown, long)).toEqual([])
   })
 })

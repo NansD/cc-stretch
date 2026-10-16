@@ -134,6 +134,38 @@ export function widthOf(text: string): number {
 }
 
 /**
+ * One part of a line split at spaces, cut into the pieces a row may break between and growth adds
+ * one at a time; a run of spaces stays whole.
+ */
+export function breakables(text: string): string[] {
+  // Nothing below Thai breaks, so a Latin word or a run of spaces comes back whole without a look at
+  // each character.
+  if (!/[^\0-\u0dff]/.test(text)) return [text]
+  const wordStarts = new Set<number>()
+  if (SEGMENTED.test(text)) for (const word of SEGMENTER.segment(text)) wordStarts.add(word.index)
+  const pieces: string[] = []
+  let piece = ''
+  let last = ''
+  let isAfterUnspaced = false
+  let at = 0
+  for (const ch of text) {
+    const isUnspaced = UNSPACED.test(ch)
+    const isWordStart = wordStarts.has(at) && SEGMENTED.test(last + ch)
+    if (piece !== '' && (isUnspaced || isAfterUnspaced || isWordStart) && !NO_START.test(ch) && !NO_END.test(last) && !ZERO_WIDTH.test(ch)) {
+      pieces.push(piece)
+      piece = ''
+    }
+    piece += ch
+    last = ch
+    isAfterUnspaced = isUnspaced || (isAfterUnspaced && NO_START.test(ch))
+    at += ch.length
+  }
+  if (piece !== '') pieces.push(piece)
+
+  return pieces
+}
+
+/**
  * A line without its tint marks, so its markdown is read from the text alone: a stretch tints the
  * words it adds one at a time, so a code span or a link label can hold several. A space takes the
  * tint before it, so a tinted phrase stays one run.
@@ -313,35 +345,6 @@ function wrap(runs: Run[], width: number, first: string, rest: string, isDimLead
   rows.push(row)
 
   return rows
-}
-
-/** One part of a line split at spaces, cut into the pieces a row may break between; a run of spaces stays whole. */
-function breakables(text: string): string[] {
-  // Nothing below Thai breaks, so a Latin word or a run of spaces comes back whole without a look at
-  // each character.
-  if (!/[^\0-\u0dff]/.test(text)) return [text]
-  const wordStarts = new Set<number>()
-  if (SEGMENTED.test(text)) for (const word of SEGMENTER.segment(text)) wordStarts.add(word.index)
-  const pieces: string[] = []
-  let piece = ''
-  let last = ''
-  let isAfterUnspaced = false
-  let at = 0
-  for (const ch of text) {
-    const isUnspaced = UNSPACED.test(ch)
-    const isWordStart = wordStarts.has(at) && SEGMENTED.test(last + ch)
-    if (piece !== '' && (isUnspaced || isAfterUnspaced || isWordStart) && !NO_START.test(ch) && !NO_END.test(last) && !ZERO_WIDTH.test(ch)) {
-      pieces.push(piece)
-      piece = ''
-    }
-    piece += ch
-    last = ch
-    isAfterUnspaced = isUnspaced || (isAfterUnspaced && NO_START.test(ch))
-    at += ch.length
-  }
-  if (piece !== '') pieces.push(piece)
-
-  return pieces
 }
 
 /** Rows of text kept as written, cut every `width` cells. */

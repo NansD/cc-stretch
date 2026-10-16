@@ -13,7 +13,16 @@ export type Task = {
   question: string
   evidence: string
   key: { know: string[]; defer: string[]; never: string[] }
+  /** The items a good answer lists, each one visible with a stretch of its own; each item is the words that name it. */
+  items?: string[][]
+  /** A good answer is short enough to need no stretch. */
+  needsNoStretch?: true
+  /** The person's instruction that requires a closing block, which the answer must make its last stretch. */
+  closing?: string
 }
+
+/** The fields of a task the layout rules read. */
+export type Layout = Pick<Task, 'items' | 'needsNoStretch' | 'closing'>
 
 export const TASKS: Task[] = [
   {

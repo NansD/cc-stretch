@@ -30,7 +30,7 @@ export function grow(
   paint: (word: string) => string = word => word,
 ): string {
   const tokens = tokenize(long)
-  const anchors = anchorsOf(short, tokens)
+  const { anchors } = anchorsOf(short, tokens)
   const shown = (atoms: Atom[]) => atoms.map(atom => (typeof atom !== 'string' ? draw(atom) : /\S/.test(atom) ? paint(atom) : atom)).join('')
 
   let out = ''
@@ -59,12 +59,13 @@ export function grow(
 
 /**
  * Where a long form's added words and nested stretches land around the short form's words: before
- * the first, between two, or after the last (all of them, when the short form has none in it).
+ * the first, between two, or after the last (all of them, when the short form has none in it). And
+ * how many of the short form's words the long form is missing, in order.
  */
-export function growthOf(short: string, long: Segment[]): Record<Side, number> {
+export function growthOf(short: string, long: Segment[]): Record<Side, number> & { missing: number } {
   const tokens = tokenize(long)
-  const anchors = anchorsOf(short, tokens)
-  const counts: Record<Side, number> = { before: 0, between: 0, after: 0 }
+  const { anchors, missing } = anchorsOf(short, tokens)
+  const counts = { before: 0, between: 0, after: 0, missing }
   let run = 0
   let hasAnchorBefore = false
   tokens.forEach((token, i) => {
@@ -121,10 +122,10 @@ function tokenize(long: Segment[]): Token[] {
 
 /**
  * The token indexes of the long form that carry the short form's words, as many as can be kept in
- * order (a longest common subsequence). A nested stretch shows its own short form, so its words
- * count where it stands.
+ * order (a longest common subsequence), and how many of its words found no place. A nested stretch
+ * shows its own short form, so its words count where it stands.
  */
-function anchorsOf(short: string, tokens: Token[]): Set<number> {
+function anchorsOf(short: string, tokens: Token[]): { anchors: Set<number>; missing: number } {
   const wordsIn = (text: string) => text.split(/\s+/).flatMap(breakables)
   const want = wordsIn(short).map(bare).filter(word => word !== '')
   const have: { token: number; word: string }[] = []
@@ -147,6 +148,7 @@ function anchorsOf(short: string, tokens: Token[]): Set<number> {
   }
   if (matched < want.length) {
     anchors.clear()
+    matched = 0
     // lengths[i][j]: the longest common run of want[i..] and have[j..].
     const lengths = Array.from({ length: want.length + 1 }, () => new Array<number>(have.length + 1).fill(0))
     for (let i = want.length - 1; i >= 0; i--) {
@@ -158,6 +160,7 @@ function anchorsOf(short: string, tokens: Token[]): Set<number> {
     for (let i = 0, j = 0; i < want.length && j < have.length; ) {
       if (want[i] === have[j]?.word) {
         anchors.add(have[j]?.token ?? -1)
+        matched++
         i++
         j++
       } else if ((lengths[i + 1]?.[j] ?? 0) >= (lengths[i]?.[j + 1] ?? 0)) i++
@@ -172,7 +175,7 @@ function anchorsOf(short: string, tokens: Token[]): Set<number> {
     last = i
   })
 
-  return anchors
+  return { anchors, missing: want.length - matched }
 }
 
 /** A word without its surrounding punctuation or markdown marks, lowercased, so `cache.` meets `**cache**`. */

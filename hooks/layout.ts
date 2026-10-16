@@ -48,6 +48,12 @@ const NO_START = /[\p{Pe}\p{Pf},.:;!?，。、；：？！…·ぁぃぅぇぉ�
 const NO_END = /[\p{Ps}\p{Pi}]/u
 const SEGMENTER = new Intl.Segmenter(undefined, { granularity: 'word' })
 
+// The marks that start a markdown block on a line. The benchmark reads lines with the same ones.
+export const TABLE_ROW = /^\s*\|/
+export const HEADING = /^#{1,6}\s+(.*)$/
+export const QUOTE = /^>\s?(.*)$/
+export const LIST_ITEM = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/
+
 /** A line's text without its tint marks, and the tint of each character left. */
 type Line = { text: string; tints: (string | undefined)[] }
 
@@ -197,12 +203,12 @@ function rowsOf({ text: line, tints }: Line, width: number): Row[] {
   if (line.trim() === '') return [[]]
   if (isRule(line)) return [[{ text: '─'.repeat(Math.min(width, 60)), dim: true }]]
   // A table row keeps its columns: written as is, cut where the region ends.
-  if (/^\s*\|/.test(line)) return cutRows(inlineOf(line), width)
-  const heading = /^#{1,6}\s+(.*)$/.exec(line)
+  if (TABLE_ROW.test(line)) return cutRows(inlineOf(line), width)
+  const heading = HEADING.exec(line)
   if (heading) return wrap(inlineOf(heading[1] ?? '', true), width, '', '')
-  const quote = /^>\s?(.*)$/.exec(line)
+  const quote = QUOTE.exec(line)
   if (quote) return wrap(inlineOf(quote[1] ?? ''), width, '▎ ', '▎ ', true)
-  const item = /^(\s*)([-*+]|\d+[.)])\s+(.*)$/.exec(line)
+  const item = LIST_ITEM.exec(line)
   if (item) {
     const lead = `${item[1] ?? ''}${item[2] ?? ''} `
     return wrap(inlineOf(item[3] ?? ''), width, lead, ' '.repeat(widthOf(lead)))

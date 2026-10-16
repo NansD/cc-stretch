@@ -71,8 +71,6 @@ never lose your place.
 
 - **Stretches nest.** A long form can hold more stretches.
 - **Streaming stays clean.** While a reply streams, stretches already show as their short forms.
-- **Quieter tool calls.** A finished group of tool calls folds to Claude Code's own one-line summary
-  (`Ran 3 shell commands ▸ show`). Running calls, and calls that errored, stay open.
 
 ## Limits
 
@@ -90,7 +88,6 @@ never lose your place.
 - Built on Claude Code's function-hook plugin API, which is early access and changes between
   releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294 and 2.1.300, and in
   the Claude desktop app with 2.1.295.
-- In the Claude desktop app the plugin's tool-call folding is not drawn; the app shows its own.
 - A terminal session that also has the desktop app attached shows the markup while a reply streams,
   because the desktop builds its links from it.
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.5 — 2026-10-16
+
+- Tool calls are drawn by Claude Code itself again: a click on a finished group's one-line summary
+  opens it, and a terminal that draws no links no longer prints `▸ show (https://cc-stretch.invalid/)`
+  ([#1](https://github.com/pro-vi/cc-stretch/issues/1)). The plugin's own `▸ show` fold is gone.
+  Contributed by @ppikkuaho in [#10](https://github.com/pro-vi/cc-stretch/pull/10).
+- Chinese and Japanese replies wrap between characters, so a row no longer ends half empty, and
+  punctuation such as ， or 。 or a Japanese small kana never starts a row. Korean wraps at spaces and
+  Thai between words; Thai vowel and tone marks no longer take a cell of their own.
+- While a reply streams, a stretch after a code span that runs over a line break shows as its short
+  form instead of its raw markup ([#6](https://github.com/pro-vi/cc-stretch/issues/6)).
+- A line such as "```python …" inside a code block no longer ends the block
+  ([#7](https://github.com/pro-vi/cc-stretch/issues/7)).
+- Emoji such as 🚀 count as two cells, so a click after one lands on the phrase under it
+  ([#8](https://github.com/pro-vi/cc-stretch/issues/8)).
+- `npm run bench:report` runs on a fresh clone without writing over the published numbers
+  ([#9](https://github.com/pro-vi/cc-stretch/issues/9)).
+
+#6 to #9 were reported by @rahul05ranjan.
+
 ## 0.3.4 — 2026-10-15
 
 - In fullscreen on Claude Code 2.1.300, a new reply's stretches are underlined and open on a click

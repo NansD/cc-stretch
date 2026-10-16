@@ -2,6 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { render } from '../bench/measure.ts'
+import { parse, stretches } from '../hooks/parse.ts'
 
 // The benchmark measures what the reader sees, so its skim must be the text the terminal draws.
 
@@ -40,4 +41,12 @@ describe('the benchmark skim', () => {
       expect(collapsed(render(text, new Set()))).toBe(await onScreen($, text))
     })
   }
+
+  // A key with a line break split the link's markup across rows, and laying it out never ended. The key
+  // check runs first, so that fault fails this test instead of hanging the run.
+  test('is what the screen draws for a stretch nested in a short form over two lines, whose key breaks no line', async $ => {
+    const text = 'Before {{the first line\nand the second|the long {{form|form drawn}} open}} after.'
+    expect(stretches(parse(text)).map(s => s.key).filter(key => key.includes('\n'))).toEqual([])
+    expect(collapsed(render(text, new Set()))).toBe(await onScreen($, text))
+  })
 })

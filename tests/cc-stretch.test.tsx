@@ -217,6 +217,10 @@ describe('parse', () => {
     expect(stretches(parse('{{a|1}} {{a|2}}')).map(s => s.key)).toEqual(['a', 'a~2'])
   })
 
+  test('keys a short form over several lines with ↵ for each line break, so no one-line short form shares its key', async () => {
+    expect(stretches(parse('{{a\nb|1}} {{a b|2}} {{a|{{b|3}}}} {{a\n› b|4}}')).map(s => s.key)).toEqual(['a↵b', 'a b', 'a', 'a › b', 'a↵› b'])
+  })
+
   test('a stretch still streaming is not closed, and one with no long form opens nothing', async () => {
     const [, partial] = parse('Lead {{partial|long so far')
     expect(typeof partial !== 'string' && partial).toMatchObject({ short: 'partial', isClosed: false })
@@ -232,6 +236,20 @@ describe('layout', () => {
     expect(linkAt(rows, 6, 1)).toEqual({ action: 'open', key: 'k' })
     expect(linkAt(rows, 0, 1)).toBeUndefined()
     expect(linkAt(rows, 0, 2)).toEqual({ action: 'open', key: 'k' })
+  })
+
+  // Nerd Font icons sit in the Private Use Area, so a reply can hold any of its characters.
+  test('draws Private Use Area characters as written and keeps a link after them pressable', async () => {
+    const icons = '\ue000\ue001\ue002\ue003\ue004 '
+    const rows = layout(`${icons}${link('open', 'k', 'four')} ok`, 30)
+    expect(rows.map(row => row.map(run => run.text).join(''))).toEqual([`${icons}four ok`])
+    expect(linkAt(rows, widthOf(icons) + 1, 0)).toEqual({ action: 'open', key: 'k' })
+  })
+
+  test('lays out a line holding a mark with no separator after it, reading the mark as a character', async () => {
+    const start = link('open', 'k', 'x').charAt(0)
+    const shade = tint('red', 'x').charAt(0)
+    expect(layout(`a ${start} b ${shade} c`, 30).map(row => row.map(run => run.text).join(''))).toEqual([`a ${start} b ${shade} c`])
   })
 
   test('a press a cell beside a one-cell closer lands on it', async () => {

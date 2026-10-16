@@ -7,9 +7,9 @@ export type Segment = string | Stretch
 
 export type Stretch = {
   /**
-   * Names the stretch by its short form and its parents' (`cache › key`), so a
-   * stretch added elsewhere in the reply leaves every other key as it was. A
-   * short form repeated among siblings takes `~2`, `~3`.
+   * Names the stretch by its trimmed short form, each line break in it written ↵, and
+   * its parents' (`cache › key`), so a stretch added elsewhere in the reply leaves
+   * every other key as it was. A short form repeated among siblings takes `~2`, `~3`.
    */
   key: string
   short: string
@@ -147,7 +147,9 @@ export function parse(text: string): Segment[] {
 }
 
 function keyOf(short: string, parent: Frame | undefined, rootSiblings: Map<string, number>): string {
-  const name = short.trim()
+  // A line break in a key would split the link's markup across rows in `layout`; ↵ keeps the key apart
+  // from the same words on one line, which a space would not.
+  const name = short.trim().replaceAll('\n', '↵')
   const siblings = parent?.siblings ?? rootSiblings
   const seen = (siblings.get(name) ?? 0) + 1
   siblings.set(name, seen)

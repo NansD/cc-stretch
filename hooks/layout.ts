@@ -21,13 +21,14 @@ export type Run = {
 
 export type Row = Run[]
 
-// Private-use characters frame a pressable phrase or a tinted word in composed text; a reply never
-// writes them.
-const START = '\ue000'
-const SEP = '\ue001'
-const END = '\ue002'
-const TINT = '\ue003'
-const TINT_END = '\ue004'
+// Noncharacters frame a pressable phrase or a tinted word in composed text: Unicode keeps them for a
+// program's own use, where the Private Use Area holds icons such as Nerd Font's. A start mark with no
+// separator after it is read as a character, so a stray one still lets its line be laid out.
+const START = '\ufdd0'
+const SEP = '\ufdd1'
+const END = '\ufdd2'
+const TINT = '\ufdd3'
+const TINT_END = '\ufdd4'
 
 // A mark drawn on the letter before it, or a character no terminal draws, takes no cell.
 const ZERO_WIDTH = /[\p{Mn}\p{Me}\p{Default_Ignorable_Code_Point}]/u
@@ -182,8 +183,8 @@ function untint(marked: string): Line {
   let tinted: string | undefined
   for (let i = 0; i < marked.length; i++) {
     const ch = marked[i] ?? ''
-    if (ch === TINT) {
-      const sep = marked.indexOf(SEP, i + 1)
+    const sep = ch === TINT ? marked.indexOf(SEP, i + 1) : -1
+    if (sep !== -1) {
       tinted = marked.slice(i + 1, sep)
       i = sep
     } else if (ch === TINT_END) {
@@ -243,9 +244,9 @@ function inline(text: string, tints: Line['tints'], isBold = false): Run[] {
 
   for (let i = 0; i < text.length; ) {
     const ch = text[i] ?? ''
-    if (ch === START) {
-      const first = text.indexOf(SEP, i + 1)
-      const second = text.indexOf(SEP, first + 1)
+    const first = ch === START ? text.indexOf(SEP, i + 1) : -1
+    const second = first === -1 ? -1 : text.indexOf(SEP, first + 1)
+    if (second !== -1) {
       pressable = { action: text.slice(i + 1, first) === 'close' ? 'close' : 'open', key: text.slice(first + 1, second) }
       i = second + 1
       continue

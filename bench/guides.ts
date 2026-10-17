@@ -12,9 +12,13 @@ const LABEL = `- Each short form says something itself, the gist of its long for
 const TRUE = `- Every short form stays true without a click. A condition, doubt, limit or warning that changes what it claims, or what the reader should do next, stays in the short form itself: "the import probably finishes tonight" never shortens to "the import finishes tonight", nor "safe to rerun once the lock is released" to "safe to rerun".`
 const CLAIM = `- To find a short form, write the full sentence, then delete words until what is left is a grammatical claim with the same subject and outcome. A short form makes that claim ("The retry duplicates writes."); it never only announces its topic ("Retry details." or "There is a retry issue.").`
 
-/** `base` with `line` inserted after the bullet that starts with `anchor`. */
+/**
+ * `base` with `line` inserted after the bullet that starts with `anchor`, or `base` itself when it
+ * already holds `line`: a line the plugin's guide took up keeps every variant that adds it the same.
+ */
 function withLine(base: string, anchor: string, line: string): string {
   const rows = base.split('\n')
+  if (rows.includes(line)) return base
   const at = rows.findIndex(row => row.startsWith(anchor))
   if (at === -1) throw new Error(`no bullet starts with ${anchor}`)
   return [...rows.slice(0, at + 1), line, ...rows.slice(at + 1)].join('\n')
@@ -46,4 +50,6 @@ export const VARIANTS: Readonly<Record<string, string>> = Object.fromEntries(
 )
 
 /** The lines each variant adds to g0, in reading order, for a test to hold it to them. */
-export const ADDED: Readonly<Record<string, readonly string[]>> = Object.fromEntries(Object.entries(RECIPES).map(([name, recipe]) => [name, recipe.map(([, line]) => line)]))
+export const ADDED: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+  Object.entries(RECIPES).map(([name, recipe]) => [name, recipe.map(([, line]) => line).filter(line => !GUIDE.split('\n').includes(line))]),
+)

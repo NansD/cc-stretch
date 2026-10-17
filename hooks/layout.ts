@@ -313,7 +313,8 @@ function inline(text: string, tints: Line['tints'], isBold = false): Run[] {
     if (markdownLink) {
       const label = markdownLink[1] ?? ''
       const href = markdownLink[2] ?? ''
-      // Only a link Claude Code's own markdown would follow is drawn as one; any other keeps its target beside it.
+      // A target that opens the same from any folder is drawn as a link; any other keeps its target
+      // beside it. Claude Code 2.1.302's own markdown links a relative path too.
       const isFollowed = /^(https?|file):/.test(href)
       for (let k = 0; k < label.length; k++) emit(label[k] ?? '', i + 1 + k, isFollowed ? { href } : { underline: true })
       if (!isFollowed) emit(` (${href})`, i + markdownLink[0].length - 1, { dim: true })

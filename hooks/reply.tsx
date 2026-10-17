@@ -66,8 +66,8 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
     surface.onPointer(event => pointer(surface, event))
     surface.every(FRAME_MS, () => tick(surface))
   }
-  // A paragraph an older version drew, still on screen after the plugin was updated in place, was
-  // handed props without the ask or the letters.
+  // As of Claude Code 2.1.302 a paragraph an older plugin version drew stays on screen after
+  // /reload-plugins, and this code is handed its old props, without the ask or the letters.
   const ask = props.ask ?? null
   const letters = props.letters ?? null
   if (ask !== null) asks.set(surface, ask)
@@ -152,9 +152,10 @@ function lettered(rows: Row[], letters: Letters | null): DrawnRun[][] {
 }
 
 /**
- * A press on a short form or a « opens or closes its stretch. Claude Code gives a Client the pointer
- * from a press until its release and selects nothing meanwhile, so a drag from anywhere else selects
- * here: the cells it crosses are highlighted, and on release their text goes to the clipboard.
+ * A press on a short form or a « opens or closes its stretch. As of Claude Code 2.1.302 a Client
+ * holds the pointer from a press until its release and the transcript selects nothing meanwhile, so a
+ * drag from anywhere else selects here: the cells it crosses are highlighted, and on release their
+ * text goes to the clipboard.
  */
 function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
   const state = surface.state
@@ -168,8 +169,8 @@ function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
     surface.setState({ ...state, selection: { anchor: cell, head: cell, isDragging: true } })
     return
   }
-  // A selection left on screen goes once the pointer moves off the paragraph, where a press elsewhere
-  // could not reach this instance to take it down.
+  // A selection left on screen goes once the pointer moves off the paragraph: as of Claude Code
+  // 2.1.302 a press elsewhere does not reach this instance to take it down.
   if (event.type === 'leave' && selection?.isDragging === false) {
     surface.setState({ ...state, selection: null })
     return
@@ -182,8 +183,10 @@ function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
   }
   if (event.type !== 'up') return
   const text = textIn(shown.laid, selection)
-  // A press that moved nowhere is a click, which takes a selection down.
-  surface.setState({ ...state, selection: text === '' ? null : { ...selection, isDragging: false } })
+  // A click (a press that moved nowhere) takes a selection down, and so does a release off the
+  // paragraph, which as of Claude Code 2.1.302 no leave follows.
+  const isOff = event.x < 0 || event.y < 0 || event.x >= surface.columns || event.y >= shown.rows.length
+  surface.setState({ ...state, selection: text === '' || isOff ? null : { ...selection, isDragging: false } })
   if (text !== '') surface.post({ copy: text } satisfies CopyPost)
 }
 

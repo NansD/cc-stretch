@@ -282,7 +282,8 @@ export const register: Register = on => {
   // A paragraph's Client posts the stretches open in it whenever they change, and the one the reader
   // just opened. Kept here, they survive a redraw, reach the next prompt and keep their colours.
   on('ui.message', async ($, e, next) => {
-    // Text the reader dragged across in a paragraph, which Claude Code cannot select there itself.
+    // Text the reader dragged across in a paragraph, where as of Claude Code 2.1.302 the transcript
+    // selects nothing itself.
     const copy = e.module.endsWith('reply.tsx') ? copyOf(e.data) : undefined
     if (copy !== undefined) {
       const copied = await $.ui.copy({ text: copy, surface: e.surface })

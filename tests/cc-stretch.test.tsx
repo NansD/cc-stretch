@@ -5,6 +5,7 @@ import type { Engine } from 'claude-code/testing'
 import { grow } from '../hooks/grow'
 import { layout, link, linkAt, tint, widthOf } from '../hooks/layout'
 import { closeAfter, hideLongForms, newStreamState, paragraphsOf, parse, stretches } from '../hooks/parse'
+import Reply from '../hooks/reply'
 
 const REPLY = [
   'The build fails {{on a stale cache|because the cache key hashes only `package.json`{{, set in one file|, set in `ci/cache.ts`}}}}.',
@@ -292,7 +293,7 @@ describe('layout', () => {
     expect(hrefs('`https://x.invalid/code`')).toEqual([])
   })
 
-  test('a markdown link to something Claude Code would not follow keeps its target beside its label', async () => {
+  test('a markdown link to a target other than http:, https: or file: keeps it beside its label', async () => {
     const runs = layout('Open [the file](ci/cache.ts) here', 80)[0] ?? []
     expect(runs.map(run => run.text).join('')).toBe('Open the file (ci/cache.ts) here')
     expect(runs.some(run => run.href)).toBe(false)
@@ -458,6 +459,37 @@ describe('selecting text', () => {
     expect(copies).toEqual(['build'])
     await ui.unmount()
   })
+
+  test('a drag released off the paragraph, past any edge, still copies and leaves no highlight behind', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    for (const off of [{ x: 4, y: 30 }, { x: 4, y: -2 }, { x: -3, y: 1 }, { x: 150, y: 1 }]) {
+      await drag(ui, { x: 4, y: 0 }, off)
+      expect((await ui.findAll({ type: 'Text', in: FIRST })).some(piece => piece.props.inverse === true)).toBe(false)
+    }
+    expect(copies).toEqual([
+      'build fails on a stale cache.\nBraces in code stay: {{a|b}}.',
+      'The b',
+      'build fails on a stale cache.\nB',
+      'build fails on a stale cache.\nBraces in code stay: {{a|b}}.',
+    ])
+    await ui.unmount()
+  })
+})
+
+test('a paragraph drawn with props from the version before, which had no ask or letters, still draws', () => {
+  // What a first draw reads of its surface; Reply is called directly, as no mount hands it chosen props.
+  const surface = {
+    elements: { Box: 'Box', Text: 'Text' },
+    state: undefined as unknown,
+    setState(next: unknown) {
+      surface.state = next
+    },
+    onPointer() {},
+    every() {},
+  }
+  const drawn = Reply({ text: 'The build fails {{on a stale cache|because the key is stale}}.', open: [], tints: {} } as never, surface as never)
+  expect(JSON.stringify(drawn)).toContain('on a stale cache')
 })
 
 test('a click inside a stretch shrinking shut opens nothing', async ($, on) => {

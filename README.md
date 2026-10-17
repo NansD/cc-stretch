@@ -72,14 +72,15 @@ never lose your place.
 - **Stretches nest.** A long form can hold more stretches.
 - **Streaming stays clean.** While a reply streams, stretches already show as their short forms.
 - **Letters for the keyboard.** In the terminal's fullscreen layout, alt+↓ or ctrl+↓ puts a letter
-  over each closed stretch in view in the latest three replies that hold one (up to 26), and typing
-  that letter opens it. alt+↑ or ctrl+↑ puts letters over each «, to close. Any other key puts the
-  letters away and is typed as usual. These are the chords that scroll the diff panel's file list
-  (as of Claude Code 2.1.301 a plugin has none of its own), so while that panel is open with more
-  than eight files they scroll it instead. By default macOS uses ctrl+↑ and ctrl+↓ for Mission
-  Control. If your terminal or system takes both chords of one action, bind another to
-  `app:diffFileListDown` or `app:diffFileListUp` in the `Global` context of
-  `~/.claude/keybindings.json`.
+  over each closed stretch in the latest three replies on screen that hold one (up to 26), and
+  typing that letter opens it. alt+↑ or ctrl+↑ puts letters over each «, to close. Typing anything
+  else puts the letters away and is typed as usual. Recalling a prompt, sending one, or pressing
+  the same chord again puts them away too. As of Claude Code 2.1.301 a plugin has no chords of its
+  own, and these are the ones that scroll the diff panel's file list, so while that panel is open
+  with more than eight files they scroll it instead. As of macOS 26, ctrl+↑ opens Mission Control
+  and ctrl+↓ shows the app's windows by default. If your terminal or system takes both chords of
+  one action, bind another to `app:diffFileListDown` or `app:diffFileListUp` in the `Global`
+  context of `~/.claude/keybindings.json`.
 
 ## Limits
 

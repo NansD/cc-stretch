@@ -12,8 +12,8 @@ const openStretches = atom({ plugin: 'cc-stretch', key: 'open' } as const, [])
 const seen = atom({ plugin: 'cc-stretch', key: 'seen' } as const, [])
 const stretchOrder = atom({ plugin: 'cc-stretch', key: 'order' } as const, { order: {}, count: 0 })
 const newestReply = atom({ plugin: 'cc-stretch', key: 'newest' } as const, '')
-const askedStretch = atom({ plugin: 'cc-stretch', key: 'ask' } as const, null, { shape: 'v1' })
-const lettering = atom({ plugin: 'cc-stretch', key: 'lettering' } as const, null, { shape: 'v1' })
+const askedStretch = atom({ plugin: 'cc-stretch', key: 'ask' } as const, null)
+const lettering = atom({ plugin: 'cc-stretch', key: 'lettering' } as const, null)
 
 // Claude Code 2.1.300 can start a session on the main screen even with fullscreen set, and the
 // variable overrides that.
@@ -49,20 +49,23 @@ const KEPT_REPLIES = 200
 /** How many of the session's latest replies with a stretch are searched for one not kept. */
 const SEARCHED_REPLIES = 50
 
-// Claude Code 2.1.301 gives a plugin no chord of its own: a Button naming one of the engine's
-// keybinding actions is pressed by that action's chords while no engine handler of it is mounted.
-// These two scroll the diff panel's file list, and Claude Code binds them in its Global context to
-// alt+down and ctrl+down, and alt+up and ctrl+up.
-/** The letters, home row first. */
+/** The letters, in row order: home, top, bottom. */
 const LETTERS = 'asdfghjklqwertyuiopzxcvbnm'
+// As of Claude Code 2.1.301 a plugin has no chord of its own: a Button naming one of the engine's
+// keybinding actions is pressed by that action's chords while no engine handler of it is mounted.
+// These two actions scroll the diff panel's file list, bound in its Global context to alt+down and
+// ctrl+down, and alt+up and ctrl+up.
 const CHORDS: Record<Action, string> = { open: 'app:diffFileListDown', close: 'app:diffFileListUp' }
-/** How many of the latest replies holding a stretch take letters. */
+/** How many of the latest replies on screen holding a stretch take letters. */
 const LETTERED_REPLIES = 3
 /** How many of the latest replies drawn by Clients are kept, to find the ones that take letters. */
 const KEPT_DRAWN_REPLIES = 50
 
-/** A reply drawn by Clients: its text, and its paragraphs with each one's state member. */
-type DrawnReply = { text: string; paragraphs: { member: string; text: string; hasStretch: boolean }[] }
+/**
+ * A reply drawn by Clients: its text, whether any of its rows are on screen, and its paragraphs that
+ * hold a stretch, with each one's state member.
+ */
+type DrawnReply = { text: string; isOnScreen: boolean; paragraphs: { member: string; text: string }[] }
 // Module state, not an atom: as of Claude Code 2.1.301 a render hook cannot write plugin state.
 const drawnReplies = new Map<string, DrawnReply>()
 
@@ -231,7 +234,8 @@ export const register: Register = on => {
         (await $.config.list().catch(() => [])).some(row => row.key === 'theme' && String(row.value).startsWith('light'))
       const palette = isLight ? PALETTES.light : PALETTES.dark
       const paragraphs = paragraphsOf(text).map((paragraph, i) => ({ ...paragraph, key: `paragraph-${i}`, member: `${e.requestId}#paragraph-${i}` }))
-      setNewest(drawnReplies, e.requestId, { text, paragraphs }, KEPT_DRAWN_REPLIES)
+      // The terminal says again whether a reply is on screen whenever a scroll changes it; null is off it.
+      setNewest(drawnReplies, e.requestId, { text, isOnScreen: e.props.onScreen !== null, paragraphs: paragraphs.filter(p => p.hasStretch) }, KEPT_DRAWN_REPLIES)
       const parts = await Promise.all(
         paragraphs.map(async ({ hasStretch, text, key, member }) => {
           if (!hasStretch) return <Markdown text={text} />
@@ -243,7 +247,8 @@ export const register: Register = on => {
         }),
       )
       // On a reply's first row the bullet and the space after it are Buttons: the first puts up the
-      // letters that open, the second those that close. A chord presses them, and so does a click.
+      // letters that open, or puts them away when they show; the second does the same for those that
+      // close. A chord presses them, and so does a click.
       return (
         <Box flexDirection="row">
           {e.props.isFirstOfReply
@@ -297,9 +302,9 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // While the letters show, the next key typed at the prompt puts them away. A key that is one of
-  // the letters asks its stretch's paragraph to open or close it, in place as a click does, and is
-  // not typed; any other key, a capital or a letter no stretch has among them, is typed as usual.
+  // While the letters show, the next edit at the prompt puts them away. A key that is one of the
+  // letters asks its stretch's paragraph to open or close it, in place as a click does, and is not
+  // typed; any other key, including a capital and a letter no stretch has, is typed as usual.
   on('prompt.edit', async ($, e, next) => {
     const shown = await read($, lettering)
     if (shown === null) return next(e)
@@ -311,18 +316,30 @@ export const register: Register = on => {
 
     return { text: e.text, cursor: e.cursor }
   })
+
+  // A change to the prompt box that is not an edit, such as a recalled history entry or a clear,
+  // puts the letters away too.
+  on('prompt.change', async ($, e, next) => {
+    if ((await read($, lettering)) !== null) await update($, lettering, () => null)
+    return next(e)
+  })
 }
 
-/** Puts up the letters for `action`, or none when no stretch in the latest replies takes one. */
+/**
+ * Puts up the letters for `action`, or puts them away when they already show for it or no stretch
+ * in the latest replies on screen takes one.
+ */
 async function showLetters($: EngineInterface, action: Action): Promise<void> {
-  const targets = await lettersFor($, action)
+  const shown = await read($, lettering)
+  const targets = shown?.action === action ? [] : await lettersFor($, action)
   await update($, lettering, () => (targets.length === 0 ? null : { action, targets }))
 }
 
 /**
- * A letter for each of the first 26 stretches `action` can act on in the latest replies holding a
- * stretch, newest first, in reading order within each. The order comes from the session's
- * messages, as Claude Code 2.1.301 first draws a reply when it scrolls into view.
+ * A letter for each of the first 26 stretches `action` can act on in the latest three replies on
+ * screen holding a stretch, newest first, in reading order within each. The order is read from the
+ * session's messages because Claude Code 2.1.301 draws a reply for the first time when it scrolls
+ * into view.
  */
 async function lettersFor($: EngineInterface, action: Action): Promise<{ letter: string; member: string; key: string }[]> {
   // With their whitespace gone, no reply is found across two messages joined by a line break.
@@ -331,11 +348,12 @@ async function lettersFor($: EngineInterface, action: Action): Promise<{ letter:
     .map(message => keyOf(message.text))
     .join('\n')
   const replies = [...drawnReplies.values()]
+    .filter(reply => reply.isOnScreen)
     .map(reply => ({ reply, at: written.lastIndexOf(keyOf(reply.text)) }))
     .filter(({ at }) => at !== -1)
     .sort((a, b) => b.at - a.at)
     .slice(0, LETTERED_REPLIES)
-  const paragraphs = replies.flatMap(({ reply }) => reply.paragraphs.filter(paragraph => paragraph.hasStretch))
+  const paragraphs = replies.flatMap(({ reply }) => reply.paragraphs)
   const targets = await Promise.all(
     paragraphs.map(async ({ member, text }) => {
       const open = await read($, memberOf(openStretches, { requestId: member }))

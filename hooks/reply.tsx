@@ -20,7 +20,7 @@ export type Tint = { words: string; closer: string }
 /** A stretch the reader asked to open or close from the keyboard, numbered so each ask acts once. */
 type Ask = { key: string; action: Action; n: number }
 
-/** While letters show: which press they stand for, and the letter of each stretch they cover. */
+/** While letters show: whether typing one opens or closes, and the letter of each stretch they cover. */
 type Letters = { action: Action; keys: Record<string, string> }
 
 /** The paragraph, the stretches the reader already has open in it, the tint of each, the last ask, and its letters. */
@@ -32,8 +32,8 @@ export type ReplyProps = { text: string; open: string[]; tints: Record<string, T
  */
 export type ReplyPost = { open: string[]; opened?: { short: string; key: string } }
 
-/** A run as drawn: a letter over the first character of a short form or a «, or the rest of that text. */
-type DrawnRun = Run & { isLetter?: true; isLettered?: true }
+/** A run as drawn: a letter over the first character of a short form or a «, or the rest of that text after it. */
+type DrawnRun = Run & { isLetter?: true; isAfterLetter?: true }
 
 type Growth = { key: string; isOpening: boolean; progress: number; duration: number }
 /** What is open, what is growing, and the number of the last ask acted on. */
@@ -112,14 +112,14 @@ function lettered(rows: Row[], letters: Letters | null): DrawnRun[][] {
       const { link } = run
       const letter = link?.action === letters.action ? keys.get(link.key) : undefined
       if (link === undefined || letter === undefined) return [run]
-      if (done.has(link.key)) return [{ ...run, isLettered: true }]
+      if (done.has(link.key)) return [{ ...run, isAfterLetter: true }]
       done.add(link.key)
       const first = GRAPHEMES.segment(run.text).containing(0)?.segment
       if (first === undefined) return [run]
       const rest = run.text.slice(first.length)
       // A letter takes one cell, so a wide first character keeps its second cell as a space.
       const cover: DrawnRun = { ...run, text: widthOf(first) > 1 ? `${letter} ` : letter, isLetter: true }
-      return rest === '' ? [cover] : [cover, { ...run, text: rest, isLettered: true }]
+      return rest === '' ? [cover] : [cover, { ...run, text: rest, isAfterLetter: true }]
     }),
   )
 }
@@ -129,13 +129,16 @@ function press(surface: ClientSurface<State>, x: number, y: number) {
   if (target !== undefined) openOrClose(surface, target.action, target.key)
 }
 
-/** Opens or closes stretch `key` as a press on it does; false when it is not in view for `action`. */
+/**
+ * Opens or closes stretch `key` as a press on it does; false when no link on screen does that, as
+ * for a letter the hooks gave a stretch still growing open, whose « is not drawn yet.
+ */
 function openOrClose(surface: ClientSurface<State>, action: Action, key: string, asked?: number): boolean {
   const state = surface.state
   const shown = drawn.get(surface)
-  if (state === undefined || shown === undefined) return false
+  if (state === undefined || shown === undefined || !hasLink(shown.rows, action, key)) return false
 
-  // A stretch still shrinking when another press lands is closed at once, so what is in view is
+  // A stretch still shrinking when another press lands is closed at once, so what can be pressed is
   // judged without it: a press inside it, or a letter put up before it closed, does nothing.
   const open = state.growth !== null && !state.growth.isOpening ? closed(state.open, state.growth.key) : state.open
   const stretch = targetsIn(shown.segments, open, action).find(one => one.key === key)
@@ -157,9 +160,8 @@ function tick(surface: ClientSurface<State>) {
   const state = surface.state
   const ask = asks.get(surface)
   if (state !== undefined && ask !== undefined && ask.n > state.asked) {
-    // The ask is spent with no change when its stretch is already as asked or not in view.
-    const isDone = state.open.includes(ask.key) === (ask.action === 'open')
-    if (isDone || !openOrClose(surface, ask.action, ask.key, ask.n)) surface.setState({ ...state, asked: ask.n })
+    // The ask is spent with no change when its stretch cannot be pressed for it.
+    if (!openOrClose(surface, ask.action, ask.key, ask.n)) surface.setState({ ...state, asked: ask.n })
     return
   }
   if (state?.growth == null) return
@@ -173,6 +175,11 @@ function tick(surface: ClientSurface<State>) {
   const open = growth.isOpening ? state.open : closed(state.open, growth.key)
   surface.setState({ ...state, open, growth: null })
   if (!growth.isOpening) surface.post({ open } satisfies ReplyPost)
+}
+
+/** Whether `rows` draw a link that does `action` to stretch `key`. */
+function hasLink(rows: Row[], action: Action, key: string): boolean {
+  return rows.some(row => row.some(run => run.link?.action === action && run.link.key === key))
 }
 
 function closed(open: string[], key: string): string[] {
@@ -192,7 +199,7 @@ function styleOf(run: DrawnRun): TextProps {
     ...(run.link && { underline: true }),
     // A letter is drawn bold on the theme's error colour, and the rest of its short form or « on its
     // permission colour, both in inverse text.
-    ...(run.isLettered && { color: 'inverseText', backgroundColor: 'permission' }),
+    ...(run.isAfterLetter && { color: 'inverseText', backgroundColor: 'permission' }),
     ...(run.isLetter && { color: 'inverseText', backgroundColor: 'error', bold: true }),
   }
 }

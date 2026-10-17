@@ -75,7 +75,7 @@ export function link(action: Action, key: string, label: string): string {
 }
 
 /**
- * The stretches in view that `action` acts on, with the stretches in `open` open: to open, those
+ * The stretches `action` acts on among those drawn, with the stretches in `open` open: to open, those
  * drawn as links with every stretch around them open; to close, those open, whose « is drawn.
  */
 export function targetsIn(parts: Segment[], open: readonly string[], action: Action): Stretch[] {
@@ -84,7 +84,7 @@ export function targetsIn(parts: Segment[], open: readonly string[], action: Act
     switch (drawnAs(part)) {
       case 'text':
         return []
-      // A short form over several lines is drawn open, with no «, so the stretches inside it are in view.
+      // A short form over several lines is drawn open, with no «, so the stretches inside it are drawn.
       case 'open':
         return targetsIn(part.long, open, action)
       case 'link':

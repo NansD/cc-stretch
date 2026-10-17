@@ -1,5 +1,5 @@
 // How a phrase the reader can press is marked: text marks that turn on or off one by one, and a
-// highlight. Shared by the hooks module, the reply and the toolbar.
+// highlight. Shared by the hooks module, which also draws the toolbar, and the reply.
 
 import { contrastOn, luminanceOf } from './contrast'
 
@@ -46,9 +46,8 @@ export function marksSetting(marks: readonly Mark[]): string {
 
 /** A look held in state, checked: what the toolbar stored, or null when there is none. */
 export function storedLook(value: unknown): Look | null {
-  if (typeof value !== 'object' || value === null || !Array.isArray((value as { marks?: unknown }).marks)) return null
-  const { marks, highlight } = value as { marks: unknown[]; highlight?: unknown }
-  return { marks: marksOf(marks.join(',')), highlight: highlightOf(highlight) }
+  if (typeof value !== 'object' || value === null || !('marks' in value) || !Array.isArray(value.marks)) return null
+  return { marks: marksOf(value.marks.join(',')), highlight: highlightOf('highlight' in value ? value.highlight : undefined) }
 }
 
 /** Whether two looks draw a phrase the same. */

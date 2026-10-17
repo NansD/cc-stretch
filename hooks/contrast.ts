@@ -8,10 +8,11 @@ export function luminanceOf(colour: string): number | undefined {
   const short = /^#([0-9a-f]{3})$/i.exec(colour)?.[1]
   const hex = short === undefined ? /^#([0-9a-f]{6})$/i.exec(colour)?.[1] : [...short].map(c => c + c).join('')
   if (hex === undefined) return undefined
-  const [r = 0, g = 0, b = 0] = [0, 2, 4]
-    .map(i => parseInt(hex.slice(i, i + 2), 16) / 255)
-    .map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
-  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+  const channel = (at: number) => {
+    const c = parseInt(hex.slice(at, at + 2), 16) / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  }
+  return 0.2126 * channel(0) + 0.7152 * channel(2) + 0.0722 * channel(4)
 }
 
 const ratio = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)

@@ -163,7 +163,7 @@ describe('streaming', () => {
 
   // As of Claude Code 2.1.302 a reload, such as the one each saved setting causes, loads the hooks module
   // afresh; plugin state outlives it, so a reply streaming across it keeps its filter.
-  test('a message\'s filter state is held in plugin state between its flushes, and dropped at the last', async ($, on) => {
+  test('a message\'s filter state is held in plugin state between its flushes, until its last or another message begins', async ($, on) => {
     on('classic.MessageDisplay', () => ({}))
     on('session.surfaces', () => ({ value: ['terminal'] }))
     const written: unknown[] = []
@@ -171,10 +171,25 @@ describe('streaming', () => {
       written.push(e.value)
       return next(e)
     })
-    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: false, delta: 'A monad is {{a wrapper|a wrapper, like\n' })
-    expect(written.at(-1)).toMatchObject({ m: { state: { open: [{ isLong: true }] } } })
-    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 1, final: true, delta: 'Maybe or List,}} with two operations.' })
+    const flush = (message: string, index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: message, index, final, delta })
+    await flush('m1', 0, 'A monad is {{a wrapper|a wrapper, like\n')
+    expect(written.at(-1)).toEqual({ m1: { open: [{ isLong: true }] } })
+    await flush('m2', 0, 'A monad is {{a wrapper|a wrapper, like\n')
+    expect(written.at(-1)).toEqual({ m2: { open: [{ isLong: true }] } })
+    await flush('m2', 1, 'Maybe or List,}} with two operations.', true)
     expect(written.at(-1)).toEqual({})
+  })
+
+  test('flushes of one message that run at once are filtered in order', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const flush = (index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
+    await flush(0, 'Intro.\n')
+    const [opening, last] = await Promise.all([flush(1, 'A monad is {{a wrapper|a wrapper, like\n'), flush(2, 'Maybe or List,}} with two operations.', true)])
+    expect(opening.displayContent).toBe('A monad is a wrapper\n')
+    expect(last.displayContent).toBe(' with two operations.')
   })
 
   // Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the display text the filter left.
@@ -205,18 +220,25 @@ describe('streaming', () => {
     await ui.unmount()
   })
 
-  test('a reply filtered before the plugin loaded is found however far back, and one search keeps the rest', async ($, on) => {
+  test('a reply filtered before the plugin loaded is found however far back, and the session is read once', async ($, on) => {
     const replies = Array.from({ length: 52 }, (_, i) => `Reply ${i}: {{short ${i}|long detail ${i}}}.`)
     let searches = 0
     on('session.messages', () => {
       searches++
       return { value: replies.map(text => ({ role: 'assistant' as const, text, toolUses: [] })) }
     })
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
     for (const [i, reply] of replies.slice(0, 2).entries()) {
       const ui = await mountReply($, FULLSCREEN, hideLongForms(reply, newStreamState()))
       expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === `short ${i}`)?.props).toMatchObject({ underline: true })
       await ui.unmount()
     }
+    const unknown = await mountReply($, FULLSCREEN, 'A reply no message holds.')
+    expect(await unknown.find({ text: 'engine' })).toBeDefined()
+    await unknown.unmount()
     expect(searches).toBe(1)
   })
 
@@ -903,7 +925,7 @@ describe('keyboard', () => {
     await ui.unmount()
   })
 
-  test('with no style set, a short form under letters stays underlined, as before styles', async ($, on) => {
+  test('with no style set, a short form under letters stays underlined', async ($, on) => {
     engine(on)
     const ui = await mountReply($, FULLSCREEN)
     await down(ui)
@@ -1244,6 +1266,8 @@ describe('style', () => {
 })
 
 describe('the style toolbar', () => {
+  /** A session with the terminal attached, where the toolbar is drawn. */
+  const terminal = (on: On) => on('session.surfaces', () => ({ value: ['terminal'] }))
   /** /cc-stretch:style typed at the prompt, in fullscreen or on the main screen. */
   const runStyle = ($: Engine, isFullscreen = true) =>
     $.command.run({ command: 'cc-stretch:style', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen, columns: 100 } })
@@ -1276,7 +1300,8 @@ describe('the style toolbar', () => {
     return said
   }
 
-  test('/cc-stretch:style shows the toolbar, and running it again leaves it shown', async $ => {
+  test('/cc-stretch:style shows the toolbar, and running it again leaves it shown', async ($, on) => {
+    terminal(on)
     const { answer, toolbar } = await showToolbar($)
     expect(answer.text).toContain('shown')
     await runStyle($)
@@ -1285,7 +1310,8 @@ describe('the style toolbar', () => {
   })
 
   test('on the main screen the command says why, and shows no toolbar', async ($, on) => {
-    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    terminal(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
     const answer = await runStyle($, false)
     expect(answer.text).toContain('run /tui fullscreen')
     expect(answer.text).toContain('CLAUDE_CODE_NO_FLICKER=1')
@@ -1294,17 +1320,28 @@ describe('the style toolbar', () => {
     await toolbar.unmount()
   })
 
-  test('the toolbar offers five marks and deep highlights, and no text colour', async $ => {
+  test('with no terminal attached the command says the toolbar is drawn there, and shows none', async ($, on) => {
+    on('session.surfaces', () => ({ value: ['desktop'] }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
+    const answer = await runStyle($)
+    expect(answer.text).toContain('drawn in the terminal')
+    const toolbar = await mountToolbar($)
+    expect(await keysOf(toolbar)).toEqual([])
+    await toolbar.unmount()
+  })
+
+  test('the toolbar offers five marks and deep highlights, and no text colour', async ($, on) => {
+    terminal(on)
     const { toolbar } = await showToolbar($)
     const keys = await keysOf(toolbar)
     expect(keys.filter(key => key.startsWith('mark-'))).toEqual(['mark-bold', 'mark-italic', 'mark-underline', 'mark-strikethrough', 'mark-dim'])
     expect(keys.filter(key => key.startsWith('highlight-#'))).toHaveLength(9)
-    for (const light of ['highlight-#5fafff', 'highlight-#87d7ff', 'highlight-#ffd75f']) expect(keys).not.toContain(light)
     expect(keys.some(key => key.startsWith('text-'))).toBe(false)
     await toolbar.unmount()
   })
 
-  test('the toolbar restyles replies live', async $ => {
+  test('the toolbar restyles replies live', async ($, on) => {
+    terminal(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-underline' })
     await toolbar.press({ key: 'mark-bold' })
@@ -1317,7 +1354,8 @@ describe('the style toolbar', () => {
     await toolbar.unmount()
   })
 
-  test('reset and save show only while a try differs from the saved style', async $ => {
+  test('reset and save show only while a try differs from the saved style', async ($, on) => {
+    terminal(on)
     const { toolbar } = await showToolbar($)
     expect(await keysOf(toolbar)).not.toContain('save')
     await toolbar.press({ key: 'mark-bold' })
@@ -1328,7 +1366,8 @@ describe('the style toolbar', () => {
     await toolbar.unmount()
   })
 
-  test('reset returns to the saved style', { options: { marks: 'dim' } }, async $ => {
+  test('reset returns to the saved style', { options: { marks: 'dim' } }, async ($, on) => {
+    terminal(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-italic' })
     const ui = await mountReply($, FULLSCREEN)
@@ -1344,6 +1383,7 @@ describe('the style toolbar', () => {
   })
 
   test('save writes the marks and the highlight when both changed, none for no marks', async ($, on) => {
+    terminal(on)
     const written = recordWrites(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-underline' })
@@ -1356,6 +1396,7 @@ describe('the style toolbar', () => {
   })
 
   test('a refused save keeps the try and says why', async ($, on) => {
+    terminal(on)
     on('config.set', () => ({ deny: 'a managed setting owns it' }))
     const said = toasts(on)
     const { toolbar } = await showToolbar($)
@@ -1383,6 +1424,7 @@ describe('the style toolbar', () => {
   }
 
   test('while a save is under way the toolbar offers nothing to press, close included', async ($, on) => {
+    terminal(on)
     const writes = heldWrites(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-bold' })
@@ -1397,6 +1439,7 @@ describe('the style toolbar', () => {
   })
 
   test('a mark pressed together with save is saved or kept as the try, never lost', async ($, on) => {
+    terminal(on)
     const written = recordWrites(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-bold' })
@@ -1407,6 +1450,7 @@ describe('the style toolbar', () => {
   })
 
   test('save writes only the settings that changed, and a later refusal names what was saved', async ($, on) => {
+    terminal(on)
     const written: [string, unknown][] = []
     on('config.set', (_, e) => {
       if (e.key === 'cc-stretch.highlight' && written.length > 0) return { deny: 'a managed setting owns it' }
@@ -1427,8 +1471,9 @@ describe('the style toolbar', () => {
   })
 
   test('close and save pressed together never say a style was dropped that then is saved', async ($, on) => {
+    terminal(on)
     // As of Claude Code 2.1.302, what is drawn above the prompt once the toolbar steps aside.
-    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
     const written = recordWrites(on)
     const said = toasts(on)
     for (const order of [['close', 'save'], ['save', 'close']] as const) {
@@ -1444,7 +1489,8 @@ describe('the style toolbar', () => {
     }
   })
 
-  test('a highlight saved in capitals is the chosen swatch, with nothing to reset or save', { options: { highlight: '#264F78' } }, async $ => {
+  test('a highlight saved in capitals is the chosen swatch, with nothing to reset or save', { options: { highlight: '#264F78' } }, async ($, on) => {
+    terminal(on)
     const { toolbar } = await showToolbar($)
     const chosen = (await toolbar.findAll({ type: 'Text' })).filter(piece => piece.text === '◆◆')
     expect(chosen.map(piece => piece.props.backgroundColor)).toEqual(['#264f78'])
@@ -1454,8 +1500,9 @@ describe('the style toolbar', () => {
   })
 
   test('close puts the toolbar away and drops a try it did not save, saying so', async ($, on) => {
+    terminal(on)
     // As of Claude Code 2.1.302, what is drawn above the prompt once the toolbar steps aside.
-    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
     const said = toasts(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-bold' })

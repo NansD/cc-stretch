@@ -92,6 +92,9 @@ never lose your place.
   `CLAUDE_CODE_NO_FLICKER=1` forces fullscreen there.
 - On Windows, clicks are reported not to work yet
   ([#1](https://github.com/pro-vi/cc-stretch/issues/1)).
+- In the terminal the plugin draws each paragraph that holds a stretch itself, and Claude Code
+  selects nothing in it. A drag there is the plugin's: the text it crosses is drawn inverse and
+  copied when the button comes up, and it stays within that paragraph.
 - Claude writes every level up front, so a reply costs about as many tokens as before. You read
   less; you don't pay less.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.

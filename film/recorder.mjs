@@ -1,7 +1,9 @@
 // Records a take of Claude Code: opens a WezTerm pane sized for the film, starts a real session in
 // it, and saves every change of the screen, colours and links included, with the second it
 // happened. A take script drives the session through the returned handle and calls finish(), which
-// writes frames.jsonl and marks.json into `out`. Needs WezTerm and a signed-in `claude`.
+// writes frames.jsonl and marks.json into `out`. Needs WezTerm and a signed-in `claude`. Record with
+// the machine otherwise idle: under load the pane redraws a few times a second, so a stretch's growth
+// crawls across the take and a settle can time out (two takes failed at a load average of 121).
 import { execFile, execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { promisify } from 'node:util';

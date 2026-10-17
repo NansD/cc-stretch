@@ -96,8 +96,8 @@ never lose your place.
   less; you don't pay less.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.
 - Built on Claude Code's function-hook plugin API, which is early access and changes between
-  releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294, 2.1.300 and
-  2.1.301, and in the Claude desktop app with 2.1.295.
+  releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294 and 2.1.300 to
+  2.1.302, and in the Claude desktop app with 2.1.295.
 - A terminal session that also has the desktop app attached shows the markup while a reply streams,
   because the desktop builds its links from it.
 

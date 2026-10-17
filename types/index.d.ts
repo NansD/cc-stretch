@@ -25,9 +25,9 @@ declare module 'claude-code' {
        * and stretch key; null while none show.
        */
       lettering: { action: 'open' | 'close'; targets: { letter: string; member: string; key: string }[] } | null
-      /** The toolbar's look (marks, text colour, highlight), which overrides the options for the session; null for none. */
-      look: { marks: string[]; text: string; highlight: string } | null
-      /** Whether /stretch-style has the toolbar open. */
+      /** The style the toolbar is trying (marks, highlight), drawn in place of the saved one until saved; null for none. */
+      look: { marks: string[]; highlight: string } | null
+      /** Whether /cc-stretch:style has the toolbar open. */
       toolbar: boolean
     }
   }

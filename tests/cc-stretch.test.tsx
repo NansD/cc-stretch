@@ -241,6 +241,7 @@ describe('streaming', () => {
     expect(searches).toBe(2)
   })
 
+  // As of Claude Code 2.1.302 a flush that fails beneath shows its delta as written.
   test('a reply whose final flush failed is found among the session\'s messages when drawn', async ($, on) => {
     on('classic.MessageDisplay', (_, e) => {
       if (e.final) throw new Error('a hook beneath failed')
@@ -251,16 +252,40 @@ describe('streaming', () => {
       const { Text } = $.ui.resolve(e)
       return <Text>engine</Text>
     })
-    const raw = 'A monad is {{a wrapper|a wrapper, like Maybe or List}}.'
+    const raw = 'A monad is {{a wrapper|a wrapper, like Maybe or List}}.\nDone.'
     let hasLanded = false
     on('session.messages', () => ({ value: hasLanded ? [{ role: 'assistant' as const, text: raw, toolUses: [] }] : [] }))
     const earlier = await mountReply($, FULLSCREEN, 'A plain reply drawn before.', 'terminal', 'reply-0')
     await earlier.unmount()
-    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: true, delta: raw }).catch(() => undefined)
+    const first = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: false, delta: 'A monad is {{a wrapper|a wrapper, like Maybe or List}}.\n' })
+    expect(first.displayContent).toBe('A monad is a wrapper.\n')
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 1, final: true, delta: 'Done.' }).catch(() => undefined)
     hasLanded = true
-    const ui = await mountReply($, FULLSCREEN, 'A monad is a wrapper.')
+    const ui = await mountReply($, FULLSCREEN, 'A monad is a wrapper.\nDone.')
     expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === 'a wrapper')?.props).toMatchObject({ underline: true })
     await ui.unmount()
+  })
+
+  test('the hooks beneath see each flush at once, and the flushes are still filtered in order', async ($, on) => {
+    const called: number[] = []
+    const releases = new Map<number, () => void>()
+    let allCalled = () => {}
+    const reached = new Promise<void>(resolve => (allCalled = resolve))
+    on('classic.MessageDisplay', async (_, e) => {
+      called.push(e.index)
+      if (called.length === 3) allCalled()
+      await new Promise<void>(resolve => releases.set(e.index, resolve))
+      return {}
+    })
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const flush = (index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
+    const all = Promise.all([flush(0, 'A monad is {{a wrapper|a wrapper, like\n'), flush(1, 'Maybe or List,}} with two.\n'), flush(2, 'End.', true)])
+    // Held one at a time, the hooks beneath would see only the first flush, and this would never resolve.
+    await reached
+    expect(called).toEqual([0, 1, 2])
+    for (const index of [2, 1, 0]) releases.get(index)?.()
+    expect((await all).map(shown => shown.displayContent)).toEqual(['A monad is a wrapper\n', ' with two.\n', 'End.'])
   })
 
   // Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the display text the filter left.
@@ -1398,6 +1423,16 @@ describe('the style toolbar', () => {
     expect(answer.text).toContain('drawn in the terminal')
     const toolbar = await mountToolbar($)
     expect(await keysOf(toolbar)).toEqual([])
+    await toolbar.unmount()
+  })
+
+  test('a stored try with no highlight is no try, so there is nothing to reset or save', async ($, on) => {
+    terminal(on)
+    on('state.get', (_, e, next) => (e.plugin === 'cc-stretch' && e.key === 'look' ? { value: { value: { marks: ['bold'] }, version: 0 } } : next(e)))
+    const { toolbar } = await showToolbar($)
+    const keys = await keysOf(toolbar)
+    expect(keys).not.toContain('save')
+    expect(keys).not.toContain('reset')
     await toolbar.unmount()
   })
 

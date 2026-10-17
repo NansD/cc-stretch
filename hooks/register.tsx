@@ -126,7 +126,7 @@ async function keepSession($: EngineInterface): Promise<void> {
   for (const message of messages) if (message.role === 'assistant') remember(message.text, hideLongForms(message.text, newStreamState()))
 }
 
-/** One filter state per streaming message, until its final flush or another message begins; null for a message left as written. */
+/** One filter state per streaming message, until its final flush, or until another begins while none of its flushes is pending; null for a message left as written. */
 const streams = new Map<string, Stream | null>()
 /** Each streaming message's latest flush, which its next one waits for. */
 const flushes = new Map<string, Promise<void>>()

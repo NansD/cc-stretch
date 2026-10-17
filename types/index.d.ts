@@ -33,8 +33,8 @@ declare module 'claude-code' {
       busy: 'save' | 'close' | null
       /**
        * Each streaming message's filter state (open stretches, code fence and code span) as its last
-       * flush left it, by message id, until its final flush or another message begins; null for a
-       * message left as written.
+       * flush left it, by message id, until its final flush, or until another message begins while
+       * none of its flushes is pending; null for a message left as written.
        */
       streams: Record<string, { open: { isLong: boolean }[]; fence: string | undefined; span: string | undefined } | null>
     }

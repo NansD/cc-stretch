@@ -1,4 +1,4 @@
-import type { On, RenderSurface } from 'claude-code'
+import type { On, PromptEditInput, PromptEditResult, RenderSurface, SessionMessage } from 'claude-code'
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
@@ -336,7 +336,7 @@ test('a press grows a stretch in place, nested ones too, and « shrinks it back'
   const ui = await mountReply($, FULLSCREEN)
   expect(await textIn(ui)).toBe('The build fails on a stale cache.\nBraces in code stay: {{a|b}}.')
   expect(await textIn(ui, 'paragraph-1')).toBe('The fix is one line.')
-  expect((await ui.find({ type: 'Text' }))?.text).toBe('⏺ ')
+  expect((await ui.find({ type: 'Button' }))?.props.label).toBe('⏺')
   // A pressable phrase is underlined; code beside it is not.
   const pieces = await ui.findAll({ type: 'Text', in: FIRST })
   expect(pieces.find(piece => piece.text === 'on a stale cache')?.props).toMatchObject({ underline: true })
@@ -644,6 +644,176 @@ test('the next prompt tells the model which stretches were opened and which not'
     'Stretchtext: no click on a stretch of your last reply was recorded. The reader may have read only the short forms; where clicks do not reach the plugin (the classic renderer, apps other than the terminal and the Claude desktop app), every stretch was drawn open.',
   ])
   await ui.unmount()
+})
+
+describe('keyboard', () => {
+  /** Presses the Button that alt+down (`down`) or alt+up (`up`) presses, to put up letters that open or close. */
+  const down = (ui: Mounted) => ui.press({ key: 'open-letters' })
+  const up = (ui: Mounted) => ui.press({ key: 'close-letters' })
+  // The test engine raises prompt.edit as the prompt box does, but has no editor beneath it: each
+  // test stands one in, and the session's messages, in the order the replies were written.
+  const engine = (on: On, replies = [REPLY]) => {
+    on('prompt.edit', ($, e) => ({ text: e.text.slice(0, e.start) + e.inputText + e.text.slice(e.end), cursor: e.start + e.inputText.length }))
+    on('session.messages', () => ({ value: replies.map(text => ({ role: 'assistant', text, toolUses: [] }) satisfies SessionMessage) }))
+  }
+  type Edit = (e: PromptEditInput) => Promise<PromptEditResult>
+  /** Whether the test engine's `$.prompt` has `edit`, which its types leave out (Claude Code 2.1.301). */
+  const hasEdit = (prompt: object): prompt is { edit: Edit } => typeof Reflect.get(prompt, 'edit') === 'function'
+  /** One key typed at an empty prompt, and the prompt it leaves. */
+  const type = async ($: Engine, key: string) => {
+    const prompt: object = $.prompt
+    if (!hasEdit(prompt)) throw new Error('the test engine has no $.prompt.edit')
+    return (await prompt.edit({ origin: { kind: 'composer' }, key: { key }, text: '', cursor: 0, start: 0, end: 0, inputText: key })).text
+  }
+  /** The letters drawn over the stretches of one paragraph. */
+  const letters = async (ui: Mounted, key = FIRST) =>
+    (await ui.findAll({ type: 'Text', in: key })).filter(piece => piece.props.backgroundColor === 'error').map(piece => piece.text)
+  const both = async (ui: Mounted) => [...(await letters(ui)), ...(await letters(ui, 'paragraph-1'))]
+
+  test('alt+down draws a letter over each closed stretch, and typing it opens the stretch in place', async ($, on) => {
+    engine(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await down(ui)
+    expect(await both(ui)).toEqual(['a', 's'])
+    // The letter covers the short form's first character, so nothing on screen moves.
+    expect(await textIn(ui)).toContain('The build fails an a stale cache.')
+
+    expect(await type($, 'a')).toBe('')
+    await ui.advance(2000)
+    expect(await textIn(ui)).toContain('because the cache key hashes only')
+    // Again, the stretch now in view inside the opened one takes a letter.
+    await down(ui)
+    expect(await both(ui)).toEqual(['a', 's'])
+    expect(await textIn(ui)).toContain('a set in one file')
+    await ui.unmount()
+  })
+
+  test('alt+up draws a letter over the « of each open stretch, and typing it closes the stretch', async ($, on) => {
+    engine(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await up(ui)
+    // With nothing open there is nothing to close, so no letters show and the key is typed.
+    expect(await both(ui)).toEqual([])
+    expect(await type($, 'a')).toBe('a')
+
+    await pressOn(ui, 'on a stale cache')
+    await ui.advance(2000)
+    await up(ui)
+    expect(await both(ui)).toEqual(['a'])
+    expect(await textIn(ui)).not.toContain('«')
+    expect(await type($, 'a')).toBe('')
+    await ui.advance(2000)
+    expect(await textIn(ui)).toContain('The build fails on a stale cache.')
+    await ui.unmount()
+  })
+
+  test('another key, or a letter no stretch has, puts the letters away and is typed as usual', async ($, on) => {
+    engine(on)
+    const ui = await mountReply($, FULLSCREEN)
+    for (const key of ['1', 'z', 'A']) {
+      await down(ui)
+      expect(await type($, key)).toBe(key)
+      expect(await both(ui)).toEqual([])
+    }
+    expect(await type($, 'a')).toBe('a')
+    await ui.unmount()
+  })
+
+  test('the same chord again puts the letters up again, and the other one swaps them', async ($, on) => {
+    engine(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await down(ui)
+    await down(ui)
+    expect(await both(ui)).toEqual(['a', 's'])
+    await type($, '1')
+
+    await pressOn(ui, 'on a stale cache')
+    await ui.advance(2000)
+    await down(ui)
+    expect(await both(ui)).toEqual(['a', 's'])
+    await up(ui)
+    expect(await both(ui)).toEqual(['a'])
+    await ui.unmount()
+  })
+
+  test('a letter put up before the stretch around it closed opens nothing', async ($, on) => {
+    engine(on)
+    let context: readonly string[] | undefined
+    on('prompt.submit', ($, e) => {
+      context = e.context
+      return { text: e.text, context: e.context }
+    })
+    const ui = await mountReply($, FULLSCREEN)
+    await pressOn(ui, 'on a stale cache')
+    await ui.advance(2000)
+    // Letter a goes to the stretch inside the open one; a click then closes the open one.
+    await down(ui)
+    await pressOn(ui, '«')
+    await ui.advance(2000)
+    expect(await type($, 'a')).toBe('')
+    await ui.advance(2000)
+    await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
+    expect(context).toEqual([
+      'Stretchtext: since your last reply the reader opened "on a stale cache". They did not open ", set in one file", "The fix is one line.".',
+    ])
+    await ui.unmount()
+  })
+
+  test('past the 26th stretch none takes a letter, one keyed constructor among them', async ($, on) => {
+    // The 27th is keyed `constructor`, a name every plain object answers to.
+    const text = `${Array.from({ length: 26 }, (_, i) => `{{w${i}|more ${i}}}`).join(' ')} {{constructor|more}}`
+    engine(on, [text])
+    const ui = await mountReply($, FULLSCREEN, text)
+    await down(ui)
+    expect(await letters(ui)).toHaveLength(26)
+    expect(await textIn(ui)).toContain('constructor')
+    await ui.unmount()
+  })
+
+  test('a letter on a stretch inside one shrinking shut opens nothing', async ($, on) => {
+    engine(on)
+    let context: readonly string[] | undefined
+    on('prompt.submit', ($, e) => {
+      context = e.context
+      return { text: e.text, context: e.context }
+    })
+    const ui = await mountReply($, FULLSCREEN)
+    await pressOn(ui, 'on a stale cache')
+    await ui.advance(2000)
+    await up(ui)
+    expect(await type($, 'a')).toBe('')
+    await ui.advance(100)
+    // Until the shrink ends the hooks count the stretch as open, so letter a goes to the one inside it,
+    // which the paragraph then refuses.
+    await down(ui)
+    expect(await type($, 'a')).toBe('')
+    await ui.advance(2000)
+    await $.prompt.submit({ text: 'ok', wait: false, origin: { kind: 'composer' } })
+    expect(context).toEqual([
+      'Stretchtext: since your last reply the reader opened "on a stale cache". They did not open ", set in one file", "The fix is one line.".',
+    ])
+    await ui.unmount()
+  })
+
+  test('the three newest replies holding a stretch take letters, newest first, whatever order they were drawn in', async ($, on) => {
+    const reply = (n: number) => `Reply ${n} {{says|says more}}.`
+    engine(on, [reply(1), reply(2), reply(3), reply(4), 'Reply 5 has no stretch.'])
+    // Drawn out of order, as scrolling back up draws an older reply for the first time. Reply 5, the
+    // newest, holds no stretch, so Claude Code draws it and it takes no letters.
+    const mounted = new Map<number, Mounted>()
+    for (const n of [4, 2, 1, 3]) mounted.set(n, await mountReply($, FULLSCREEN, reply(n), 'terminal', `reply-${n}`))
+    const of = (n: number) => {
+      const ui = mounted.get(n)
+      if (ui === undefined) throw new Error(`reply ${n} is not mounted`)
+      return ui
+    }
+    await down(of(4))
+    expect(await letters(of(4))).toEqual(['a'])
+    expect(await letters(of(3))).toEqual(['s'])
+    expect(await letters(of(2))).toEqual(['d'])
+    expect(await letters(of(1))).toEqual([])
+    for (const ui of mounted.values()) await ui.unmount()
+  })
 })
 
 describe('tool calls', () => {

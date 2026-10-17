@@ -1,9 +1,9 @@
 import type { ClientModule, ClientSurface, TextProps } from 'claude-code'
 
 import { grow, lengthOf } from './grow'
-import { isMarkup, layout, link, linkAt, tint } from './layout'
-import type { Row, Run } from './layout'
-import { closeAfter, isLinkable, KEY_SEPARATOR, parse, stretches } from './parse'
+import { isMarkup, layout, link, linkAt, targetsIn, tint, widthOf } from './layout'
+import type { Action, Row, Run } from './layout'
+import { closeAfter, isLinkable, KEY_SEPARATOR, parse } from './parse'
 import type { Segment, Stretch } from './parse'
 
 // Draws one paragraph of a reply that holds stretches. It runs where the reader's screen draws it,
@@ -17,8 +17,14 @@ import type { Segment, Stretch } from './parse'
  */
 export type Tint = { words: string; closer: string }
 
-/** The paragraph, the stretches the reader already has open in it, and the tint of each. */
-export type ReplyProps = { text: string; open: string[]; tints: Record<string, Tint> }
+/** A stretch the reader asked to open or close from the keyboard, numbered so each ask acts once. */
+type Ask = { key: string; action: Action; n: number }
+
+/** While letters show: which press they stand for, and the letter of each stretch they cover. */
+type Letters = { action: Action; keys: Record<string, string> }
+
+/** The paragraph, the stretches the reader already has open in it, the tint of each, the last ask, and its letters. */
+export type ReplyProps = { text: string; open: string[]; tints: Record<string, Tint>; ask: Ask | null; letters: Letters | null }
 
 /**
  * What the instance posts to the hooks module when the open stretches change, with the stretch the
@@ -26,26 +32,38 @@ export type ReplyProps = { text: string; open: string[]; tints: Record<string, T
  */
 export type ReplyPost = { open: string[]; opened?: { short: string; key: string } }
 
+/** A run as drawn: a letter over the first character of a short form or a «, or the rest of that text. */
+type DrawnRun = Run & { isLetter?: true; isLettered?: true }
+
 type Growth = { key: string; isOpening: boolean; progress: number; duration: number }
-type State = { open: string[]; growth: Growth | null }
+/** What is open, what is growing, and the number of the last ask acted on. */
+type State = { open: string[]; growth: Growth | null; asked: number }
 
 const FRAME_MS = 16
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 // What the last call drew, per instance, so a press is matched against the rows on screen.
 const drawn = new WeakMap<object, { rows: Row[]; segments: Segment[] }>()
+// The last ask each instance was handed, acted on at its next frame rather than while drawing.
+const asks = new WeakMap<object, Ask>()
 
 const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   const { Box, Text } = surface.elements
+  // An ask made before this instance was drawn is not acted on again.
+  const fresh: State = { open: props.open, growth: null, asked: props.ask?.n ?? 0 }
   if (surface.state === undefined) {
-    surface.setState({ open: props.open, growth: null })
+    surface.setState(fresh)
     surface.onPointer(event => {
       if (event.type === 'down' && event.button === 'left') press(surface, event.x, event.y)
     })
     surface.every(FRAME_MS, () => tick(surface))
   }
-  const state = surface.state ?? { open: props.open, growth: null }
+  if (props.ask !== null) asks.set(surface, props.ask)
+  const state = surface.state ?? fresh
   const segments = parse(props.text)
-  const rows = layout(compose(segments, state, props.tints), surface.columns > 0 ? surface.columns : 80)
+  // Read through Maps, which hold own keys only: a stretch keyed `constructor` must not find Object's.
+  const tints = new Map(Object.entries(props.tints))
+  const rows = lettered(layout(compose(segments, state, tints), surface.columns > 0 ? surface.columns : 80), props.letters)
   drawn.set(surface, { rows, segments })
 
   return (
@@ -63,13 +81,13 @@ export default Reply
  * The paragraph as the reader sees it now: closed stretches as pressable short forms, open ones in
  * full then a «, the words each added in its tint.
  */
-function compose(segments: Segment[], state: State, tints: Record<string, Tint>): string {
+function compose(segments: Segment[], state: State, tints: ReadonlyMap<string, Tint>): string {
   const write = (parts: Segment[]): string => parts.map(part => (typeof part === 'string' ? part : draw(part))).join('')
   const draw = (stretch: Stretch): string => {
     if (stretch.long === undefined || !stretch.isClosed) return stretch.short
     // A short form over several lines is drawn open, or as written when its long form is empty.
     if (!isLinkable(stretch)) return stretch.long.length === 0 ? stretch.short : write(stretch.long)
-    const colours = tints[stretch.key]
+    const colours = tints.get(stretch.key)
     const paint = (word: string) => (colours === undefined || isMarkup(word) ? word : tint(colours.words, word))
     if (state.growth?.key === stretch.key) return grow(stretch.short, stretch.long, easeInOut(state.growth.progress), draw, paint)
     if (!state.open.includes(stretch.key)) return link('open', stretch.key, stretch.short)
@@ -81,29 +99,69 @@ function compose(segments: Segment[], state: State, tints: Record<string, Tint>)
   return write(segments)
 }
 
+/**
+ * The rows with each letter drawn over the first character of what a press on its stretch acts on,
+ * its short form or its «, so nothing on screen moves; the rest of that text is marked.
+ */
+function lettered(rows: Row[], letters: Letters | null): DrawnRun[][] {
+  if (letters === null) return rows
+  const keys = new Map(Object.entries(letters.keys))
+  const done = new Set<string>()
+  return rows.map(row =>
+    row.flatMap((run): DrawnRun[] => {
+      const { link } = run
+      const letter = link?.action === letters.action ? keys.get(link.key) : undefined
+      if (link === undefined || letter === undefined) return [run]
+      if (done.has(link.key)) return [{ ...run, isLettered: true }]
+      done.add(link.key)
+      const first = GRAPHEMES.segment(run.text).containing(0)?.segment
+      if (first === undefined) return [run]
+      const rest = run.text.slice(first.length)
+      // A letter takes one cell, so a wide first character keeps its second cell as a space.
+      const cover: DrawnRun = { ...run, text: widthOf(first) > 1 ? `${letter} ` : letter, isLetter: true }
+      return rest === '' ? [cover] : [cover, { ...run, text: rest, isLettered: true }]
+    }),
+  )
+}
+
 function press(surface: ClientSurface<State>, x: number, y: number) {
+  const target = linkAt(drawn.get(surface)?.rows ?? [], x, y)
+  if (target !== undefined) openOrClose(surface, target.action, target.key)
+}
+
+/** Opens or closes stretch `key` as a press on it does; false when it is not in view for `action`. */
+function openOrClose(surface: ClientSurface<State>, action: Action, key: string, asked?: number): boolean {
   const state = surface.state
   const shown = drawn.get(surface)
-  if (state === undefined || shown === undefined) return
-  const target = linkAt(shown.rows, x, y)
-  if (target === undefined) return
-  const stretch = stretches(shown.segments).find(one => one.key === target.key)
-  if (stretch?.long === undefined) return
+  if (state === undefined || shown === undefined) return false
 
-  // A stretch still shrinking when another press lands is closed at once.
+  // A stretch still shrinking when another press lands is closed at once, so what is in view is
+  // judged without it: a press inside it, or a letter put up before it closed, does nothing.
   const open = state.growth !== null && !state.growth.isOpening ? closed(state.open, state.growth.key) : state.open
+  const stretch = targetsIn(shown.segments, open, action).find(one => one.key === key)
+  if (stretch?.long === undefined) return false
   const duration = 1000 * Math.min(1.4, 0.45 + lengthOf(stretch.long) / 70)
-  if (target.action === 'open') {
-    const next = [...open.filter(key => key !== stretch.key), stretch.key]
-    surface.setState({ open: next, growth: { key: stretch.key, isOpening: true, progress: 0, duration } })
+  const acted = asked ?? state.asked
+  if (action === 'open') {
+    const next = [...open.filter(k => k !== stretch.key), stretch.key]
+    surface.setState({ open: next, growth: { key: stretch.key, isOpening: true, progress: 0, duration }, asked: acted })
     surface.post({ open: next, opened: { short: stretch.short.trim(), key: stretch.key } } satisfies ReplyPost)
   } else {
-    surface.setState({ open, growth: { key: stretch.key, isOpening: false, progress: 1, duration } })
+    surface.setState({ open, growth: { key: stretch.key, isOpening: false, progress: 1, duration }, asked: acted })
   }
+
+  return true
 }
 
 function tick(surface: ClientSurface<State>) {
   const state = surface.state
+  const ask = asks.get(surface)
+  if (state !== undefined && ask !== undefined && ask.n > state.asked) {
+    // The ask is spent with no change when its stretch is already as asked or not in view.
+    const isDone = state.open.includes(ask.key) === (ask.action === 'open')
+    if (isDone || !openOrClose(surface, ask.action, ask.key, ask.n)) surface.setState({ ...state, asked: ask.n })
+    return
+  }
   if (state?.growth == null) return
   const { growth } = state
   const progress = growth.progress + ((growth.isOpening ? 1 : -1) * FRAME_MS) / growth.duration
@@ -113,7 +171,7 @@ function tick(surface: ClientSurface<State>) {
   }
   // A shrunk stretch, and every stretch inside it, leaves the open list as its growth ends.
   const open = growth.isOpening ? state.open : closed(state.open, growth.key)
-  surface.setState({ open, growth: null })
+  surface.setState({ ...state, open, growth: null })
   if (!growth.isOpening) surface.post({ open } satisfies ReplyPost)
 }
 
@@ -121,7 +179,7 @@ function closed(open: string[], key: string): string[] {
   return open.filter(k => k !== key && !k.startsWith(`${key}${KEY_SEPARATOR}`))
 }
 
-function styleOf(run: Run): TextProps {
+function styleOf(run: DrawnRun): TextProps {
   return {
     ...(run.bold && { bold: true }),
     ...(run.italic && { italic: true }),
@@ -132,6 +190,10 @@ function styleOf(run: Run): TextProps {
     // Underlined, in the text's own colour, marks what a press acts on, leaving colour to code and
     // to the words a click added. A closer is tinted like them, in its stretch's unfaded colour.
     ...(run.link && { underline: true }),
+    // A letter is drawn bold on the theme's error colour, and the rest of its short form or « on its
+    // permission colour, both in inverse text.
+    ...(run.isLettered && { color: 'inverseText', backgroundColor: 'permission' }),
+    ...(run.isLetter && { color: 'inverseText', backgroundColor: 'error', bold: true }),
   }
 }
 

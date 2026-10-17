@@ -71,6 +71,15 @@ never lose your place.
 
 - **Stretches nest.** A long form can hold more stretches.
 - **Streaming stays clean.** While a reply streams, stretches already show as their short forms.
+- **Letters for the keyboard.** In the terminal's fullscreen layout, alt+↓ or ctrl+↓ puts a letter
+  over each closed stretch in view in the latest three replies that hold one (up to 26), and typing
+  that letter opens it. alt+↑ or ctrl+↑ puts letters over each «, to close. Any other key puts the
+  letters away and is typed as usual. These are the chords that scroll the diff panel's file list
+  (as of Claude Code 2.1.301 a plugin has none of its own), so while that panel is open with more
+  than eight files they scroll it instead. By default macOS uses ctrl+↑ and ctrl+↓ for Mission
+  Control. If your terminal or system takes both chords of one action, bind another to
+  `app:diffFileListDown` or `app:diffFileListUp` in the `Global` context of
+  `~/.claude/keybindings.json`.
 
 ## Limits
 
@@ -86,8 +95,8 @@ never lose your place.
   less; you don't pay less.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.
 - Built on Claude Code's function-hook plugin API, which is early access and changes between
-  releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294 and 2.1.300, and in
-  the Claude desktop app with 2.1.295.
+  releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294, 2.1.300 and
+  2.1.301, and in the Claude desktop app with 2.1.295.
 - A terminal session that also has the desktop app attached shows the markup while a reply streams,
   because the desktop builds its links from it.
 

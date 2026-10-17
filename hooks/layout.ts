@@ -2,7 +2,8 @@
 // runs, wrapped to the region's width, so a press can be matched to the phrase under it. Claude
 // Code draws every paragraph without a stretch with its own markdown.
 
-import { closesFence, isRule, openingFence } from './parse'
+import { closesFence, drawnAs, isRule, openingFence } from './parse'
+import type { Segment, Stretch } from './parse'
 
 /** What a press on a pressable phrase does to its stretch. */
 export type Action = 'open' | 'close'
@@ -71,6 +72,26 @@ export function isMarkup(word: string): boolean {
 /** A pressable phrase for composed text: drawn as `label`, a press does `action` to stretch `key`. */
 export function link(action: Action, key: string, label: string): string {
   return `${START}${action}${SEP}${key}${SEP}${label}${END}`
+}
+
+/**
+ * The stretches in view that `action` acts on, with the stretches in `open` open: to open, those
+ * drawn as links with every stretch around them open; to close, those open, whose « is drawn.
+ */
+export function targetsIn(parts: Segment[], open: readonly string[], action: Action): Stretch[] {
+  return parts.flatMap(part => {
+    if (typeof part === 'string' || part.long === undefined) return []
+    switch (drawnAs(part)) {
+      case 'text':
+        return []
+      // A short form over several lines is drawn open, with no «, so the stretches inside it are in view.
+      case 'open':
+        return targetsIn(part.long, open, action)
+      case 'link':
+        if (!open.includes(part.key)) return action === 'open' ? [part] : []
+        return [...(action === 'close' ? [part] : []), ...targetsIn(part.long, open, action)]
+    }
+  })
 }
 
 /** The rows `text` takes in a region `columns` cells wide. */

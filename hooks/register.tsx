@@ -4,12 +4,16 @@ import type { EngineInterface, Register, RenderInput, SessionMessage } from 'cla
 import { GUIDE } from './guide'
 import { closeAfter, codeSpan, hideLongForms, isLinkable, isOpenable, KEY_SEPARATOR, newStreamState, paragraphsOf, parentOf, parse, stretches } from './parse'
 import type { Segment, StreamState, Stretch } from './parse'
+import { targetsIn } from './layout'
+import type { Action } from './layout'
 import type { ReplyPost, ReplyProps, Tint } from './reply'
 
 const openStretches = atom({ plugin: 'cc-stretch', key: 'open' } as const, [])
 const seen = atom({ plugin: 'cc-stretch', key: 'seen' } as const, [])
 const stretchOrder = atom({ plugin: 'cc-stretch', key: 'order' } as const, { order: {}, count: 0 })
 const newestReply = atom({ plugin: 'cc-stretch', key: 'newest' } as const, '')
+const askedStretch = atom({ plugin: 'cc-stretch', key: 'ask' } as const, null, { shape: 'v1' })
+const lettering = atom({ plugin: 'cc-stretch', key: 'lettering' } as const, null, { shape: 'v1' })
 
 // Claude Code 2.1.300 can start a session on the main screen even with fullscreen set, and the
 // variable overrides that.
@@ -45,6 +49,23 @@ const KEPT_REPLIES = 200
 /** How many of the session's latest replies with a stretch are searched for one not kept. */
 const SEARCHED_REPLIES = 50
 
+// Claude Code 2.1.301 gives a plugin no chord of its own: a Button naming one of the engine's
+// keybinding actions is pressed by that action's chords while no engine handler of it is mounted.
+// These two scroll the diff panel's file list, and Claude Code binds them in its Global context to
+// alt+down and ctrl+down, and alt+up and ctrl+up.
+/** The letters, home row first. */
+const LETTERS = 'asdfghjklqwertyuiopzxcvbnm'
+const CHORDS: Record<Action, string> = { open: 'app:diffFileListDown', close: 'app:diffFileListUp' }
+/** How many of the latest replies holding a stretch take letters. */
+const LETTERED_REPLIES = 3
+/** How many of the latest replies drawn by Clients are kept, to find the ones that take letters. */
+const KEPT_DRAWN_REPLIES = 50
+
+/** A reply drawn by Clients: its text, and its paragraphs with each one's state member. */
+type DrawnReply = { text: string; paragraphs: { member: string; text: string; hasStretch: boolean }[] }
+// Module state, not an atom: as of Claude Code 2.1.301 a render hook cannot write plugin state.
+const drawnReplies = new Map<string, DrawnReply>()
+
 /** A reply's text with its whitespace gone, as the site may break and trim its lines. */
 const keyOf = (text: string) => text.replace(/\s+/g, '')
 
@@ -55,11 +76,16 @@ const keyOf = (text: string) => text.replace(/\s+/g, '')
 const unfiltered = new Map<string, string | null>()
 
 function remember({ raw, shown }: Stream): void {
-  unfiltered.delete(keyOf(shown))
-  unfiltered.set(keyOf(shown), raw === shown ? null : raw)
-  for (const key of unfiltered.keys()) {
-    if (unfiltered.size <= KEPT_REPLIES) break
-    unfiltered.delete(key)
+  setNewest(unfiltered, keyOf(shown), raw === shown ? null : raw, KEPT_REPLIES)
+}
+
+/** Sets `key` in `map` as its newest entry, dropping the oldest past `size`. */
+function setNewest<V>(map: Map<string, V>, key: string, value: V, size: number): void {
+  map.delete(key)
+  map.set(key, value)
+  for (const old of map.keys()) {
+    if (map.size <= size) break
+    map.delete(old)
   }
 }
 
@@ -129,6 +155,7 @@ export const register: Register = on => {
     const unopened = written.filter(short => !opened.includes(short))
     await update($, seen, () => [])
     await update($, newestReply, () => '')
+    await update($, lettering, () => null)
     if (opened.length === 0 && unopened.length === 0) return next(e)
 
     const quote = (list: string[]) => list.map(s => `"${s}"`).join(', ')
@@ -143,7 +170,7 @@ export const register: Register = on => {
   }).catch(($, e, next) => next(e))
 
   // The reply that says why stretches are open on the main screen: the first drawn there since the
-  // plugin loaded. A render hook cannot write plugin state, so it is kept here.
+  // plugin loaded. As of Claude Code 2.1.301 a render hook cannot write plugin state, so it is kept here.
   let notedRequest: string | undefined
   on('ui.render', { component: 'AssistantMessage' }, async ($, e, next) => {
     if (e.props.isSummary === true) return next(e)
@@ -192,25 +219,39 @@ export const register: Register = on => {
     if (canPress(e)) {
       // A paragraph holding a stretch is drawn by a Client, on the screen's side; the rest is
       // Claude Code's own markdown.
-      const { Box, Client, Markdown, Text } = $.ui.resolve(e)
-      const [{ order, count }, newest] = await Promise.all([read($, memberOf(stretchOrder, { requestId: e.requestId })), read($, newestReply)])
+      const { Box, Button, Client, Markdown, Text } = $.ui.resolve(e)
+      const [{ order, count }, newest, shown] = await Promise.all([
+        read($, memberOf(stretchOrder, { requestId: e.requestId })),
+        read($, newestReply),
+        read($, lettering),
+      ])
       // The theme matters only once a stretch in this reply is open and so tinted.
       const isLight =
         Object.keys(order).length > 0 &&
         (await $.config.list().catch(() => [])).some(row => row.key === 'theme' && String(row.value).startsWith('light'))
       const palette = isLight ? PALETTES.light : PALETTES.dark
+      const paragraphs = paragraphsOf(text).map((paragraph, i) => ({ ...paragraph, key: `paragraph-${i}`, member: `${e.requestId}#paragraph-${i}` }))
+      setNewest(drawnReplies, e.requestId, { text, paragraphs }, KEPT_DRAWN_REPLIES)
       const parts = await Promise.all(
-        paragraphsOf(text).map(async (paragraph, i) => {
-          if (!paragraph.hasStretch) return <Markdown text={paragraph.text} />
-          const key = `paragraph-${i}`
-          const open = await read($, memberOf(openStretches, { requestId: `${e.requestId}#${key}` }))
+        paragraphs.map(async ({ hasStretch, text, key, member }) => {
+          if (!hasStretch) return <Markdown text={text} />
+          const [open, ask] = await Promise.all([read($, memberOf(openStretches, { requestId: member })), read($, memberOf(askedStretch, { requestId: member }))])
           const tints = tintsOf(order, key, newest === e.requestId ? count - 1 : -1, palette)
-          return <Client key={key} module="./reply.tsx" props={{ text: paragraph.text, open, tints } satisfies ReplyProps} width="100%" />
+          const keys = Object.fromEntries((shown?.targets ?? []).filter(one => one.member === member).map(one => [one.key, one.letter]))
+          const props: ReplyProps = { text, open, tints, ask, letters: shown === null ? null : { action: shown.action, keys } }
+          return <Client key={key} module="./reply.tsx" props={props} width="100%" />
         }),
       )
+      // On a reply's first row the bullet and the space after it are Buttons: the first puts up the
+      // letters that open, the second those that close. A chord presses them, and so does a click.
       return (
         <Box flexDirection="row">
-          <Text>{marker}</Text>
+          {e.props.isFirstOfReply
+            ? [
+                <Button key="open-letters" plain label="⏺" action={CHORDS.open} onPress={() => void showLetters($, 'open')} />,
+                <Button key="close-letters" plain label=" " action={CHORDS.close} onPress={() => void showLetters($, 'close')} />,
+              ]
+            : <Text>{marker}</Text>}
           <Box flexDirection="column" flexShrink={1} gap={1}>
             {parts}
           </Box>
@@ -255,6 +296,54 @@ export const register: Register = on => {
     if (opened !== undefined) await update($, newestReply, () => e.requestId)
     return next(e)
   })
+
+  // While the letters show, the next key typed at the prompt puts them away. A key that is one of
+  // the letters asks its stretch's paragraph to open or close it, in place as a click does, and is
+  // not typed; any other key, a capital or a letter no stretch has among them, is typed as usual.
+  on('prompt.edit', async ($, e, next) => {
+    const shown = await read($, lettering)
+    if (shown === null) return next(e)
+    await update($, lettering, () => null)
+    const typed = e.key?.ctrl === undefined && e.key?.meta === undefined ? e.key?.key : undefined
+    const target = shown.targets.find(one => one.letter === typed)
+    if (target === undefined) return next(e)
+    await update($, memberOf(askedStretch, { requestId: target.member }), last => ({ key: target.key, action: shown.action, n: (last?.n ?? 0) + 1 }))
+
+    return { text: e.text, cursor: e.cursor }
+  })
+}
+
+/** Puts up the letters for `action`, or none when no stretch in the latest replies takes one. */
+async function showLetters($: EngineInterface, action: Action): Promise<void> {
+  const targets = await lettersFor($, action)
+  await update($, lettering, () => (targets.length === 0 ? null : { action, targets }))
+}
+
+/**
+ * A letter for each of the first 26 stretches `action` can act on in the latest replies holding a
+ * stretch, newest first, in reading order within each. The order comes from the session's
+ * messages, as Claude Code 2.1.301 first draws a reply when it scrolls into view.
+ */
+async function lettersFor($: EngineInterface, action: Action): Promise<{ letter: string; member: string; key: string }[]> {
+  // With their whitespace gone, no reply is found across two messages joined by a line break.
+  const written = (await $.session.messages().catch(() => []))
+    .filter(message => message.role === 'assistant' && message.text.includes('{{'))
+    .map(message => keyOf(message.text))
+    .join('\n')
+  const replies = [...drawnReplies.values()]
+    .map(reply => ({ reply, at: written.lastIndexOf(keyOf(reply.text)) }))
+    .filter(({ at }) => at !== -1)
+    .sort((a, b) => b.at - a.at)
+    .slice(0, LETTERED_REPLIES)
+  const paragraphs = replies.flatMap(({ reply }) => reply.paragraphs.filter(paragraph => paragraph.hasStretch))
+  const targets = await Promise.all(
+    paragraphs.map(async ({ member, text }) => {
+      const open = await read($, memberOf(openStretches, { requestId: member }))
+      return targetsIn(parse(text), open, action).map(stretch => ({ member, key: stretch.key }))
+    }),
+  )
+
+  return targets.flat().slice(0, LETTERS.length).map((target, i) => ({ ...target, letter: LETTERS.charAt(i) }))
 }
 
 /**

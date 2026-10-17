@@ -66,13 +66,17 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
     surface.onPointer(event => pointer(surface, event))
     surface.every(FRAME_MS, () => tick(surface))
   }
-  if (props.ask !== null) asks.set(surface, props.ask)
+  // A paragraph an older version drew, still on screen after the plugin was updated in place, was
+  // handed props without the ask or the letters.
+  const ask = props.ask ?? null
+  const letters = props.letters ?? null
+  if (ask !== null) asks.set(surface, ask)
   const state = surface.state ?? fresh
   const segments = parse(props.text)
   // Read through Maps, which hold own keys only: a stretch keyed `constructor` must not find Object's.
   const tints = new Map(Object.entries(props.tints))
   const laid = layout(compose(segments, state, tints), surface.columns > 0 ? surface.columns : 80)
-  const lettering = lettered(laid, props.letters)
+  const lettering = lettered(laid, letters)
   drawn.set(surface, { laid, rows: lettering, segments })
   const rows = state.selection === null ? lettering : selected(lettering, state.selection)
   // In Claude Code 2.1.302 in WezTerm 20260905-195314-b99b1ca2, the cells that start the next

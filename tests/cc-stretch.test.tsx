@@ -161,6 +161,22 @@ describe('streaming', () => {
     expect((await flush('m2', 1, 'Maybe or List,}} with two operations.', true)).displayContent).toBeUndefined()
   })
 
+  // As of Claude Code 2.1.302 a reload, such as the one each saved setting causes, loads the hooks module
+  // afresh; plugin state outlives it, so a reply streaming across it keeps its filter.
+  test('a message\'s filter state is held in plugin state between its flushes, and dropped at the last', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const written: unknown[] = []
+    on('state.set', { plugin: 'cc-stretch', key: 'streams' }, (_, e, next) => {
+      written.push(e.value)
+      return next(e)
+    })
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: false, delta: 'A monad is {{a wrapper|a wrapper, like\n' })
+    expect(written.at(-1)).toMatchObject({ m: { state: { open: [{ isLong: true }] } } })
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 1, final: true, delta: 'Maybe or List,}} with two operations.' })
+    expect(written.at(-1)).toEqual({})
+  })
+
   // Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the display text the filter left.
   test('a reply the filter drew short is drawn from its markup, pressable', async ($, on) => {
     on('classic.MessageDisplay', () => ({}))
@@ -1164,6 +1180,21 @@ describe('style', () => {
     expect(closer).toMatchObject({ bold: true })
     await ui.unmount()
   })
+
+  for (const highlight of ['#264f78', '']) {
+    const name = highlight === '' ? 'stays dim with no highlight' : 'takes the highlight and its text colour, not dim'
+    test(`the target written after a relative link in a short form ${name}`, { options: { highlight } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, 'Read {{the [guide](docs/guide.md)|the [guide](docs/guide.md) first}} now.')
+      const target = (await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === ' (docs/guide.md)')?.props
+      if (highlight === '') {
+        expect(target).toMatchObject({ dimColor: true })
+      } else {
+        expect(target).toMatchObject({ backgroundColor: highlight, color: '#f2f2f2' })
+        expect(target).not.toHaveProperty('dimColor')
+      }
+      await ui.unmount()
+    })
+  }
 
   test('lookOf reads marks in any case, with commas or spaces, in toolbar order', () => {
     expect(lookOf({ marks: 'Underline , BOLD' }).marks).toEqual(['bold', 'underline'])

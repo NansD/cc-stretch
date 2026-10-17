@@ -26,6 +26,11 @@ const toolbarShown = atom({ plugin: 'cc-stretch', key: 'toolbar' } as const, fal
  * and a save outlives the reload.
  */
 const toolbarHolder = atom({ plugin: 'cc-stretch', key: 'busy' } as const, null)
+/**
+ * Each streaming message's filter state, by message id, until its final flush; null for a message left
+ * as written. Plugin state for the same reason: a save can land while a reply streams.
+ */
+const streaming = atom({ plugin: 'cc-stretch', key: 'streams' } as const, {})
 
 // The highlights the toolbar offers: deep colours, whose text turns light. A light highlight would draw
 // dark text on a light ground, as a selection does. No text colour is offered: links, code and the
@@ -255,19 +260,22 @@ export const register: Register = (on, options) => {
 
   // While a reply streams, Claude Code draws its lines as they arrive, before the reply reaches
   // the AssistantMessage site below. Showing each stretch as its short form there too keeps the
-  // raw markup from flashing past. One filter state per message, until its final flush; null for a
-  // message left as written.
-  const streams = new Map<string, Stream | null>()
+  // raw markup from flashing past. One filter state per message, kept in `streaming`.
   on('classic.MessageDisplay', async ($, e, next) => {
     const answer = await next(e)
     // The desktop app draws a finished reply from this display text, so hiding the long forms here
     // would strip the markup its links are made from. Decided on a message's first flush, so a
     // surface that attaches or leaves midway cannot half-filter it.
-    let stream = streams.get(e.message_id)
+    let stream: Stream | null | undefined = (await read($, streaming))[e.message_id]
     if (stream === undefined) stream = (await $.session.surfaces()).includes('desktop') ? null : { state: newStreamState(), raw: '', shown: '' }
+    const kept = stream
+    const keep = () =>
+      update($, streaming, all => {
+        const { [e.message_id]: _, ...others } = all
+        return e.final ? others : { ...others, [e.message_id]: kept }
+      })
     if (stream === null) {
-      if (e.final) streams.delete(e.message_id)
-      else streams.set(e.message_id, stream)
+      await keep()
       return answer
     }
 
@@ -275,12 +283,8 @@ export const register: Register = (on, options) => {
     const displayContent = hideLongForms(delta, stream.state)
     stream.raw += delta
     stream.shown += displayContent
-    if (e.final) {
-      streams.delete(e.message_id)
-      remember(stream)
-    } else {
-      streams.set(e.message_id, stream)
-    }
+    await keep()
+    if (e.final) remember(stream)
 
     return { ...answer, displayContent }
   })

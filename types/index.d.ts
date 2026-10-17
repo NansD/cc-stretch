@@ -31,6 +31,15 @@ declare module 'claude-code' {
       toolbar: boolean
       /** Which action holds the toolbar's one-at-a-time claim, a save or a close; null while none does. */
       busy: 'save' | 'close' | null
+      /**
+       * Each streaming message's filter state (open stretches, code fence and code span) with what it
+       * held and what it was shown as so far, by message id, until its final flush; null for a message
+       * left as written.
+       */
+      streams: Record<
+        string,
+        { state: { open: { isLong: boolean }[]; fence: string | undefined; span: string | undefined }; raw: string; shown: string } | null
+      >
     }
   }
 }

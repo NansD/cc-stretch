@@ -325,18 +325,20 @@ function closed(open: string[], key: string): string[] {
 }
 
 function styleOf(run: DrawnRun, look: Look): TextProps {
+  // A phrase a press acts on carries the look: underlined in the text's own colour by default,
+  // leaving colour to code, to the words a click added and to a hyperlink inside the phrase. A
+  // closer is tinted like those words. While a letter covers the phrase it stays underlined, whatever
+  // the look, and the letter's own colours stand alone.
+  const looked = run.link && !run.isLetter && !run.isAfterLetter ? lookProps(look, !run.tint && !run.code && run.href === undefined) : undefined
   return {
     ...(run.bold && { bold: true }),
     ...(run.italic && { italic: true }),
     ...(run.underline && { underline: true }),
-    ...(run.dim && { dimColor: true }),
+    // A highlight wins over a run's own dim too, such as a link target's: see lookProps.
+    ...(run.dim && looked?.backgroundColor === undefined && { dimColor: true }),
     ...(run.tint && { color: run.tint }),
     ...(run.code && { color: 'permission' }),
-    // A phrase a press acts on carries the look: underlined in the text's own colour by default,
-    // leaving colour to code, to the words a click added and to a hyperlink inside the phrase. A
-    // closer is tinted like those words. While a letter covers the phrase it stays underlined, whatever
-    // the look, and the letter's own colours stand alone.
-    ...(run.link && (run.isLetter || run.isAfterLetter ? { underline: true } : lookProps(look, !run.tint && !run.code && run.href === undefined))),
+    ...(run.link && (looked ?? { underline: true })),
     // A hyperlink is underlined in the suggestion colour, so it is not read as a stretch to press.
     ...(run.href !== undefined && { underline: true, color: 'suggestion' }),
     // A letter is drawn bold on the theme's error colour, and the rest of its short form or « on its

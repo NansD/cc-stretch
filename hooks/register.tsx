@@ -21,10 +21,11 @@ const pickedLook = atom({ plugin: 'cc-stretch', key: 'look' } as const, null)
 /** Whether /cc-stretch:style has the toolbar open. */
 const toolbarShown = atom({ plugin: 'cc-stretch', key: 'toolbar' } as const, false)
 /**
- * Whether a save of the toolbar's style is under way. Plugin state, not module state: as of Claude
- * Code 2.1.302 each setting written reloads the plugin, and the save outlives the reload.
+ * Which action holds the toolbar's one-at-a-time claim, a save or a close; null while none does.
+ * Plugin state, not module state: as of Claude Code 2.1.302 each setting written reloads the plugin,
+ * and a save outlives the reload.
  */
-const savingStyle = atom({ plugin: 'cc-stretch', key: 'saving' } as const, false)
+const toolbarHolder = atom({ plugin: 'cc-stretch', key: 'busy' } as const, null)
 
 // The highlights the toolbar offers: deep colours, whose text turns light. A light highlight would draw
 // dark text on a light ground, as a selection does. No text colour is offered: links, code and the
@@ -126,16 +127,8 @@ async function rawOf($: EngineInterface, text: string): Promise<string | undefin
  * `<plugin>.<field>`, and each write reloads the plugin with them; the toolbar offers nothing to
  * press until the save is done.
  */
-async function saveLook($: EngineInterface, saved: Look): Promise<void> {
-  // Claimed before anything is read, so a second press, or one from a toolbar drawn before this save
-  // began, finds the save under way and does nothing.
-  const claim = { isMine: false }
-  await update($, savingStyle, isSaving => {
-    claim.isMine = !isSaving
-    return true
-  })
-  if (!claim.isMine) return
-  try {
+function saveLook($: EngineInterface, saved: Look): Promise<void> {
+  return withClaim($, 'save', async () => {
     // Read when pressed: a mark pressed after the toolbar was last drawn is part of what is saved.
     const tried = storedLook(await read($, pickedLook))
     if (tried === null) return
@@ -153,26 +146,44 @@ async function saveLook($: EngineInterface, saved: Look): Promise<void> {
       written.push(field)
     }
     await update($, pickedLook, stored => (isSameLook(storedLook(stored) ?? saved, tried) ? null : stored))
-  } finally {
-    await update($, savingStyle, () => false)
-  }
+  })
 }
 
-/** Drops the try, unless a save is under way: a reset drawn before it began does nothing then. */
+/** Drops the try, unless a save or a close holds the claim: a reset drawn before it began does nothing then. */
 async function resetTry($: EngineInterface): Promise<void> {
-  if (!(await read($, savingStyle))) await update($, pickedLook, () => null)
+  if ((await read($, toolbarHolder)) === null) await update($, pickedLook, () => null)
 }
 
 /**
- * Puts the toolbar away; a try not saved goes with it, and the reader is told so. A close drawn before
- * a save began does nothing while the save is under way.
+ * Puts the toolbar away; a try not saved goes with it, and the reader is told so. It takes the same
+ * claim as a save, so a close and a save pressed together never both act on the try.
  */
-async function closeToolbar($: EngineInterface, saved: Look): Promise<void> {
-  if (await read($, savingStyle)) return
-  const tried = storedLook(await read($, pickedLook))
-  await update($, toolbarShown, () => false)
-  await update($, pickedLook, () => null)
-  if (tried !== null && !isSameLook(tried, saved)) $.ui.toast('cc-stretch: the style you tried was not saved')
+function closeToolbar($: EngineInterface, saved: Look): Promise<void> {
+  return withClaim($, 'close', async () => {
+    const [stored] = await Promise.all([read($, pickedLook), update($, toolbarShown, () => false)])
+    await update($, pickedLook, () => null)
+    const tried = storedLook(stored)
+    if (tried !== null && !isSameLook(tried, saved)) $.ui.toast('cc-stretch: the style you tried was not saved')
+  })
+}
+
+/**
+ * Runs a save or a close under the toolbar's one-at-a-time claim, taken before it reads the try and
+ * released after, so a second press, or one from a toolbar drawn before the first began, finds the
+ * claim held and does nothing.
+ */
+async function withClaim($: EngineInterface, holder: 'save' | 'close', run: () => Promise<void>): Promise<void> {
+  const taken = { isMine: false }
+  await update($, toolbarHolder, held => {
+    taken.isMine = held === null
+    return taken.isMine ? holder : held
+  })
+  if (!taken.isMine) return
+  try {
+    await run()
+  } finally {
+    await update($, toolbarHolder, () => null)
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -189,7 +200,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Terminal only: the desktop app draws each Button natively, where a highlight swatch has no label.
     if (e.surface !== 'terminal' || e.props.hasSurvey || !(await read($, toolbarShown))) return next(e)
-    const [stored, isSaving] = await Promise.all([read($, pickedLook), read($, savingStyle)])
+    const [stored, holder] = await Promise.all([read($, pickedLook), read($, toolbarHolder)])
     const tried = storedLook(stored)
     const look = tried ?? baseLook
     // Only a try that differs from the saved style leaves anything to reset or save.
@@ -203,9 +214,9 @@ export const register: Register = (on, options) => {
     const toggle = (mark: Mark) => change(now => ({ marks: now.marks.includes(mark) ? now.marks.filter(m => m !== mark) : [...now.marks, mark] }))
     const { Box, Button, Text } = $.ui.resolve(e)
     const chosen = (isOn: boolean, label: string) => (isOn ? <Text bold>[{label}]</Text> : <Text>{label}</Text>)
-    // While a save is under way nothing is pressable: a press then would race the save's writes.
+    // While a save or a close holds the claim nothing is pressable: a press then would race it.
     const pressable = (key: string, onPress: () => unknown, label: RenderNode) =>
-      isSaving ? <Text key={key}>{label}</Text> : <Button plain key={key} onPress={onPress}>{label}</Button>
+      holder !== null ? <Text key={key}>{label}</Text> : <Button plain key={key} onPress={onPress}>{label}</Button>
     // Swatches are two cells wide; the chosen one is marked ◆◆, a chosen word [like this].
     const swatch = (c: string) =>
       pressable(`highlight-${c}`, () => change(() => ({ highlight: c })), <Text backgroundColor={c} {...contrastOn(c)}>{look.highlight === c ? '◆◆' : '  '}</Text>)
@@ -220,9 +231,10 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         {row('marks', [
           ...MARK_NAMES.map(mark => pressable(`mark-${mark}`, () => toggle(mark), chosen(look.marks.includes(mark), mark))),
-          // While saving, the marks stay readable and the actions give way to the word saving.
-          ...(isSaving
-            ? [<Text key="saving" dimColor>saving</Text>]
+          // While a save holds the claim the marks stay readable and the actions give way to the word
+          // saving; a close holds it only while the toolbar goes away.
+          ...(holder !== null
+            ? holder === 'save' ? [<Text key="saving" dimColor>saving</Text>] : []
             : [
                 ...(isTrying
                   ? [

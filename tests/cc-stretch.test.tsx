@@ -1129,7 +1129,7 @@ describe('style', () => {
     await ui.unmount()
   })
 
-  test('marks and a highlight combine', { options: { marks: 'italic,strikethrough', highlight: '#264f78' } }, async $ => {
+  test('marks other than dim combine with a highlight', { options: { marks: 'italic,strikethrough', highlight: '#264f78' } }, async $ => {
     const ui = await mountReply($, FULLSCREEN)
     const phrase = await phraseProps(ui)
     expect(phrase).toMatchObject({ italic: true, strikethrough: true, backgroundColor: '#264f78' })
@@ -1142,6 +1142,14 @@ describe('style', () => {
     const phrase = await phraseProps(ui)
     expect(phrase).toMatchObject({ backgroundColor: '#264f78', color: '#f2f2f2' })
     expect(phrase).not.toHaveProperty('underline')
+    await ui.unmount()
+  })
+
+  test('a highlight wins over dim, so the text keeps the colour chosen to read on it', { options: { marks: 'dim', highlight: '#264f78' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ backgroundColor: '#264f78', color: '#f2f2f2' })
+    expect(phrase).not.toHaveProperty('dimColor')
     await ui.unmount()
   })
 
@@ -1203,6 +1211,15 @@ describe('the style toolbar', () => {
     })
   const showToolbar = async ($: Engine) => ({ answer: await runStyle($), toolbar: await mountToolbar($) })
   const keysOf = async (toolbar: Awaited<ReturnType<typeof mountToolbar>>) => (await toolbar.findAll({ type: 'Button' })).map(button => String(button.key))
+  /** What the toolbar writes to the settings, each write answered as made. */
+  const recordWrites = (on: On) => {
+    const written: [string, unknown][] = []
+    on('config.set', (_, e) => {
+      written.push([e.key, e.value])
+      return { value: e.value }
+    })
+    return written
+  }
   /** What the toolbar toasts. */
   const toasts = (on: On) => {
     const said: string[] = []
@@ -1281,11 +1298,7 @@ describe('the style toolbar', () => {
   })
 
   test('save writes the marks and the highlight when both changed, none for no marks', async ($, on) => {
-    const written: [string, unknown][] = []
-    on('config.set', (_, e) => {
-      written.push([e.key, e.value])
-      return { value: e.value }
-    })
+    const written = recordWrites(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-underline' })
     await toolbar.press({ key: 'highlight-#264f78' })
@@ -1338,11 +1351,7 @@ describe('the style toolbar', () => {
   })
 
   test('a mark pressed together with save is saved or kept as the try, never lost', async ($, on) => {
-    const written: [string, unknown][] = []
-    on('config.set', (_, e) => {
-      written.push([e.key, e.value])
-      return { value: e.value }
-    })
+    const written = recordWrites(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-bold' })
     await Promise.all([toolbar.press({ key: 'mark-italic' }), toolbar.press({ key: 'save' })])
@@ -1371,6 +1380,24 @@ describe('the style toolbar', () => {
     await toolbar.unmount()
   })
 
+  test('close and save pressed together never say a style was dropped that then is saved', async ($, on) => {
+    // As of Claude Code 2.1.302, what is drawn above the prompt once the toolbar steps aside.
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+    const written = recordWrites(on)
+    const said = toasts(on)
+    for (const order of [['close', 'save'], ['save', 'close']] as const) {
+      written.length = 0
+      said.length = 0
+      await runStyle($)
+      const toolbar = await mountToolbar($)
+      await toolbar.press({ key: 'mark-bold' })
+      await Promise.allSettled(order.map(key => toolbar.press({ key })))
+      if (said.includes('cc-stretch: the style you tried was not saved')) expect(written).toEqual([])
+      else expect(written).toEqual([['cc-stretch.marks', 'bold,underline']])
+      await toolbar.unmount()
+    }
+  })
+
   test('a highlight saved in capitals is the chosen swatch, with nothing to reset or save', { options: { highlight: '#264F78' } }, async $ => {
     const { toolbar } = await showToolbar($)
     const chosen = (await toolbar.findAll({ type: 'Text' })).filter(piece => piece.text === '◆◆')
@@ -1381,7 +1408,7 @@ describe('the style toolbar', () => {
   })
 
   test('close puts the toolbar away and drops a try it did not save, saying so', async ($, on) => {
-    // What Claude Code draws above the prompt once the toolbar steps aside.
+    // As of Claude Code 2.1.302, what is drawn above the prompt once the toolbar steps aside.
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
     const said = toasts(on)
     const { toolbar } = await showToolbar($)

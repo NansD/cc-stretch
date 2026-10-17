@@ -29,8 +29,8 @@ declare module 'claude-code' {
       look: { marks: string[]; highlight: string } | null
       /** Whether /cc-stretch:style has the toolbar open. */
       toolbar: boolean
-      /** Whether a save of the toolbar's style is under way. */
-      saving: boolean
+      /** Which action holds the toolbar's one-at-a-time claim, a save or a close; null while none does. */
+      busy: 'save' | 'close' | null
     }
   }
 }

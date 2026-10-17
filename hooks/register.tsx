@@ -20,6 +20,11 @@ const lettering = atom({ plugin: 'cc-stretch', key: 'lettering' } as const, null
 const pickedLook = atom({ plugin: 'cc-stretch', key: 'look' } as const, null)
 /** Whether /cc-stretch:style has the toolbar open. */
 const toolbarShown = atom({ plugin: 'cc-stretch', key: 'toolbar' } as const, false)
+/**
+ * Whether a save of the toolbar's style is under way. Plugin state, not module state: as of Claude
+ * Code 2.1.302 each setting written reloads the plugin, and the save outlives the reload.
+ */
+const savingStyle = atom({ plugin: 'cc-stretch', key: 'saving' } as const, false)
 
 // The highlights the toolbar offers: deep colours, whose text turns light. A light highlight would draw
 // dark text on a light ground, as a selection does. No text colour is offered: links, code and the
@@ -28,9 +33,10 @@ const HIGHLIGHTS = ['#264f78', '#1f3a5f', '#3b4261', '#4b3b6b', '#5c2a4a', '#5f2
 
 // Claude Code 2.1.300 can start a session on the main screen even with fullscreen set, and the
 // variable overrides that.
+const FULLSCREEN_HOW = 'run /tui fullscreen. If it says fullscreen is already on, start Claude Code with CLAUDE_CODE_NO_FLICKER=1, which forces fullscreen.'
 const MAIN_SCREEN_NOTE =
   "cc-stretch: stretches are open because this session is on Claude Code's main screen, where a printed reply cannot change. " +
-  'For clickable stretches, run /tui fullscreen. If it says fullscreen is already on, start Claude Code with CLAUDE_CODE_NO_FLICKER=1, which forces fullscreen.'
+  `For clickable stretches, ${FULLSCREEN_HOW}`
 
 // The words a stretch adds are drawn in Claude Code's own theme colours (its 2.1.300 values for
 // warning, autoAccept, planMode and claude), mixed 45% toward the text colour so they tint rather
@@ -114,27 +120,59 @@ async function rawOf($: EngineInterface, text: string): Promise<string | undefin
 }
 
 /**
- * Writes a style into the plugin's settings, which Claude Code reloads the plugin with, then drops the
- * try. A refusal keeps the try and says why. As of Claude Code 2.1.302 the settings land in the
- * person's user settings, keyed `<plugin>.<field>`.
+ * Writes the style being tried into the plugin's settings, the ones that differ from `saved`, then
+ * drops the try unless a press since made it differ again. A refusal keeps the try and says what was
+ * and was not saved. As of Claude Code 2.1.302 the settings land in the person's user settings, keyed
+ * `<plugin>.<field>`, and each write reloads the plugin with them; the toolbar offers nothing to
+ * press until the save is done.
  */
-async function saveLook($: EngineInterface, look: Look): Promise<void> {
-  const fields: [string, string][] = [['marks', marksSetting(look.marks)], ['highlight', look.highlight]]
-  for (const [field, value] of fields) {
-    const result = await $.config.set({ key: `cc-stretch.${field}`, value }).catch((error: unknown) => ({ deny: error instanceof Error ? error.message : String(error) }))
-    if (result.deny !== undefined) {
-      $.ui.toast(`cc-stretch: the style was not saved: ${result.deny}`)
-      return
+async function saveLook($: EngineInterface, saved: Look): Promise<void> {
+  // Claimed before anything is read, so a second press, or one from a toolbar drawn before this save
+  // began, finds the save under way and does nothing.
+  const claim = { isMine: false }
+  await update($, savingStyle, isSaving => {
+    claim.isMine = !isSaving
+    return true
+  })
+  if (!claim.isMine) return
+  try {
+    // Read when pressed: a mark pressed after the toolbar was last drawn is part of what is saved.
+    const tried = storedLook(await read($, pickedLook))
+    if (tried === null) return
+    const fields: [string, string, string][] = [
+      ['marks', marksSetting(tried.marks), marksSetting(saved.marks)],
+      ['highlight', tried.highlight, saved.highlight],
+    ]
+    const written: string[] = []
+    for (const [field, value] of fields.filter(([, value, before]) => value !== before)) {
+      const result = await $.config.set({ key: `cc-stretch.${field}`, value }).catch((error: unknown) => ({ deny: error instanceof Error ? error.message : String(error) }))
+      if (result.deny !== undefined) {
+        $.ui.toast(written.length === 0 ? `cc-stretch: the style was not saved: ${result.deny}` : `cc-stretch: ${written.join(' and ')} saved, ${field} not saved: ${result.deny}`)
+        return
+      }
+      written.push(field)
     }
+    await update($, pickedLook, stored => (isSameLook(storedLook(stored) ?? saved, tried) ? null : stored))
+  } finally {
+    await update($, savingStyle, () => false)
   }
-  await update($, pickedLook, () => null)
 }
 
-/** Puts the toolbar away; a try not saved goes with it, and the reader is told so. */
-async function closeToolbar($: EngineInterface, isTrying: boolean): Promise<void> {
+/** Drops the try, unless a save is under way: a reset drawn before it began does nothing then. */
+async function resetTry($: EngineInterface): Promise<void> {
+  if (!(await read($, savingStyle))) await update($, pickedLook, () => null)
+}
+
+/**
+ * Puts the toolbar away; a try not saved goes with it, and the reader is told so. A close drawn before
+ * a save began does nothing while the save is under way.
+ */
+async function closeToolbar($: EngineInterface, saved: Look): Promise<void> {
+  if (await read($, savingStyle)) return
+  const tried = storedLook(await read($, pickedLook))
   await update($, toolbarShown, () => false)
   await update($, pickedLook, () => null)
-  if (isTrying) $.ui.toast('cc-stretch: the style you tried was not saved')
+  if (tried !== null && !isSameLook(tried, saved)) $.ui.toast('cc-stretch: the style you tried was not saved')
 }
 
 export const register: Register = (on, options) => {
@@ -143,7 +181,7 @@ export const register: Register = (on, options) => {
   // file. It only shows the toolbar: as of Claude Code 2.1.302 its own [-] collapses the panel without
   // the plugin knowing, so a toggle could hide a toolbar the reader no longer sees.
   on('command.run', { command: 'cc-stretch:style' }, async ($, e) => {
-    if (e.presentation?.isFullscreen === false) return { text: 'The style toolbar is drawn in fullscreen; on the main screen every stretch is drawn open. Run /tui fullscreen first.' }
+    if (e.presentation?.isFullscreen === false) return { text: `The style toolbar is drawn in fullscreen; on the main screen every stretch is drawn open. To use it, ${FULLSCREEN_HOW}` }
     await update($, toolbarShown, () => true)
     return { text: 'Style toolbar shown above the prompt; close puts it away.' }
   })
@@ -151,7 +189,8 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // Terminal only: the desktop app draws each Button natively, where a highlight swatch has no label.
     if (e.surface !== 'terminal' || e.props.hasSurvey || !(await read($, toolbarShown))) return next(e)
-    const tried = storedLook(await read($, pickedLook))
+    const [stored, isSaving] = await Promise.all([read($, pickedLook), read($, savingStyle)])
+    const tried = storedLook(stored)
     const look = tried ?? baseLook
     // Only a try that differs from the saved style leaves anything to reset or save.
     const isTrying = tried !== null && !isSameLook(tried, baseLook)
@@ -164,12 +203,12 @@ export const register: Register = (on, options) => {
     const toggle = (mark: Mark) => change(now => ({ marks: now.marks.includes(mark) ? now.marks.filter(m => m !== mark) : [...now.marks, mark] }))
     const { Box, Button, Text } = $.ui.resolve(e)
     const chosen = (isOn: boolean, label: string) => (isOn ? <Text bold>[{label}]</Text> : <Text>{label}</Text>)
+    // While a save is under way nothing is pressable: a press then would race the save's writes.
+    const pressable = (key: string, onPress: () => unknown, label: RenderNode) =>
+      isSaving ? <Text key={key}>{label}</Text> : <Button plain key={key} onPress={onPress}>{label}</Button>
     // Swatches are two cells wide; the chosen one is marked ◆◆, a chosen word [like this].
-    const swatch = (c: string) => (
-      <Button plain key={`highlight-${c}`} onPress={() => change(() => ({ highlight: c }))}>
-        <Text backgroundColor={c} {...contrastOn(c)}>{look.highlight === c ? '◆◆' : '  '}</Text>
-      </Button>
-    )
+    const swatch = (c: string) =>
+      pressable(`highlight-${c}`, () => change(() => ({ highlight: c })), <Text backgroundColor={c} {...contrastOn(c)}>{look.highlight === c ? '◆◆' : '  '}</Text>)
     // A plain Button draws its label alone, without padding, so a space goes between each two.
     const row = (label: string, parts: RenderNode[]) => (
       <Box key={`row-${label}`} flexWrap="wrap">
@@ -180,17 +219,22 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         {row('marks', [
-          ...MARK_NAMES.map(mark => <Button plain key={`mark-${mark}`} onPress={() => toggle(mark)}>{chosen(look.marks.includes(mark), mark)}</Button>),
-          ...(isTrying
-            ? [
-                <Button plain key="reset" onPress={() => update($, pickedLook, () => null)}>reset</Button>,
-                <Button plain key="save" onPress={() => saveLook($, look)}>save</Button>,
-              ]
-            : []),
-          <Button plain key="close" onPress={() => closeToolbar($, isTrying)}>close</Button>,
+          ...MARK_NAMES.map(mark => pressable(`mark-${mark}`, () => toggle(mark), chosen(look.marks.includes(mark), mark))),
+          // While saving, the marks stay readable and the actions give way to the word saving.
+          ...(isSaving
+            ? [<Text key="saving" dimColor>saving</Text>]
+            : [
+                ...(isTrying
+                  ? [
+                      <Button plain key="reset" onPress={() => resetTry($)}>reset</Button>,
+                      <Button plain key="save" onPress={() => saveLook($, baseLook)}>save</Button>,
+                    ]
+                  : []),
+                <Button plain key="close" onPress={() => closeToolbar($, baseLook)}>close</Button>,
+              ]),
         ])}
         {row('highlight', [
-          <Button plain key="highlight-none" onPress={() => change(() => ({ highlight: '' }))}>{chosen(look.highlight === '', 'no highlight')}</Button>,
+          pressable('highlight-none', () => change(() => ({ highlight: '' })), chosen(look.highlight === '', 'no highlight')),
           ...HIGHLIGHTS.map(swatch),
         ])}
       </Box>

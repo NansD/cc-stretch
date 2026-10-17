@@ -872,6 +872,16 @@ describe('keyboard', () => {
     await ui.unmount()
   })
 
+  test('with no style set, a short form under letters stays underlined, as before styles', async ($, on) => {
+    engine(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await down(ui)
+    const lettered = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => ['error', 'permission'].includes(String(piece.props.backgroundColor)))
+    expect(lettered.map(piece => piece.text)).toEqual(['a', 'n a stale cache'])
+    for (const piece of lettered) expect(piece.props).toMatchObject({ underline: true })
+    await ui.unmount()
+  })
+
   test('the close-letters Button draws a letter over the « of each open stretch, and typing it closes the stretch', async ($, on) => {
     engine(on)
     const ui = await mountReply($, FULLSCREEN)
@@ -1160,6 +1170,16 @@ describe('style', () => {
     expect(lookOf({ marks: marksSetting(['bold', 'underline']) }).marks).toEqual(['bold', 'underline'])
   })
 
+  test('under dim, a link inside a short form keeps its colour while the words around it dim', { options: { marks: 'dim' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN, 'See {{the docs at https://x.invalid/d|the docs at https://x.invalid/d, with examples}} now.')
+    const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+    const url = pieces.find(piece => piece.text === 'https://x.invalid/d')?.props
+    expect(url).toMatchObject({ color: 'suggestion', underline: true })
+    expect(url).not.toHaveProperty('dimColor')
+    expect(pieces.find(piece => piece.text === 'the docs at ')?.props).toMatchObject({ dimColor: true })
+    await ui.unmount()
+  })
+
   test('contrastOn picks the stronger of dark and light text, and leaves non-hex colours alone', () => {
     expect(contrastOn('#ffd75f')).toEqual({ color: '#1c1c1c' })
     expect(contrastOn('#264f78')).toEqual({ color: '#f2f2f2' })
@@ -1204,7 +1224,8 @@ describe('the style toolbar', () => {
   test('on the main screen the command says why, and shows no toolbar', async ($, on) => {
     on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
     const answer = await runStyle($, false)
-    expect(answer.text).toContain('fullscreen')
+    expect(answer.text).toContain('run /tui fullscreen')
+    expect(answer.text).toContain('CLAUDE_CODE_NO_FLICKER=1')
     const toolbar = await mountToolbar($)
     expect(await keysOf(toolbar)).toEqual([])
     await toolbar.unmount()
@@ -1259,7 +1280,7 @@ describe('the style toolbar', () => {
     await toolbar.unmount()
   })
 
-  test('save writes the marks and the highlight to the settings, none for no marks', async ($, on) => {
+  test('save writes the marks and the highlight when both changed, none for no marks', async ($, on) => {
     const written: [string, unknown][] = []
     on('config.set', (_, e) => {
       written.push([e.key, e.value])
@@ -1283,6 +1304,79 @@ describe('the style toolbar', () => {
     await toolbar.press({ key: 'save' })
     expect(said).toEqual(['cc-stretch: the style was not saved: a managed setting owns it'])
     expect(await keysOf(toolbar)).toContain('save')
+    await toolbar.unmount()
+  })
+
+  /** A settings writer that holds each write until `release`, saying when one is held. */
+  const heldWrites = (on: On) => {
+    const written: [string, unknown][] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => (release = resolve))
+    let entered: () => void = () => {}
+    const held = new Promise<void>(resolve => (entered = resolve))
+    on('config.set', async (_, e) => {
+      entered()
+      await gate
+      written.push([e.key, e.value])
+      return { value: e.value }
+    })
+    return { written, held, release: () => release() }
+  }
+
+  test('while a save is under way the toolbar offers nothing to press, close included', async ($, on) => {
+    const writes = heldWrites(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-bold' })
+    const saving = toolbar.press({ key: 'save' })
+    await writes.held
+    expect(await keysOf(toolbar)).toEqual([])
+    writes.release()
+    await saving
+    expect(await keysOf(toolbar)).toContain('close')
+    expect(await keysOf(toolbar)).not.toContain('save')
+    await toolbar.unmount()
+  })
+
+  test('a mark pressed together with save is saved or kept as the try, never lost', async ($, on) => {
+    const written: [string, unknown][] = []
+    on('config.set', (_, e) => {
+      written.push([e.key, e.value])
+      return { value: e.value }
+    })
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-bold' })
+    await Promise.all([toolbar.press({ key: 'mark-italic' }), toolbar.press({ key: 'save' })])
+    const savedItalic = written.some(([key, value]) => key === 'cc-stretch.marks' && String(value).includes('italic'))
+    expect(savedItalic || (await keysOf(toolbar)).includes('save')).toBe(true)
+    await toolbar.unmount()
+  })
+
+  test('save writes only the settings that changed, and a later refusal names what was saved', async ($, on) => {
+    const written: [string, unknown][] = []
+    on('config.set', (_, e) => {
+      if (e.key === 'cc-stretch.highlight' && written.length > 0) return { deny: 'a managed setting owns it' }
+      written.push([e.key, e.value])
+      return { value: e.value }
+    })
+    const said = toasts(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'highlight-#264f78' })
+    await toolbar.press({ key: 'save' })
+    expect(written).toEqual([['cc-stretch.highlight', '#264f78']])
+    await toolbar.press({ key: 'mark-bold' })
+    await toolbar.press({ key: 'highlight-#1f3a5f' })
+    await toolbar.press({ key: 'save' })
+    expect(written).toEqual([['cc-stretch.highlight', '#264f78'], ['cc-stretch.marks', 'bold,underline']])
+    expect(said).toEqual(['cc-stretch: marks saved, highlight not saved: a managed setting owns it'])
+    await toolbar.unmount()
+  })
+
+  test('a highlight saved in capitals is the chosen swatch, with nothing to reset or save', { options: { highlight: '#264F78' } }, async $ => {
+    const { toolbar } = await showToolbar($)
+    const chosen = (await toolbar.findAll({ type: 'Text' })).filter(piece => piece.text === '◆◆')
+    expect(chosen.map(piece => piece.props.backgroundColor)).toEqual(['#264f78'])
+    await toolbar.press({ key: 'highlight-#264f78' })
+    expect(await keysOf(toolbar)).not.toContain('save')
     await toolbar.unmount()
   })
 

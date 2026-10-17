@@ -333,9 +333,10 @@ function styleOf(run: DrawnRun, look: Look): TextProps {
     ...(run.tint && { color: run.tint }),
     ...(run.code && { color: 'permission' }),
     // A phrase a press acts on carries the look: underlined in the text's own colour by default,
-    // leaving colour to code and to the words a click added. A closer is tinted like them. While a
-    // letter covers the phrase, the letter's own colours stand alone.
-    ...(run.link && !run.isLetter && !run.isAfterLetter && lookProps(look, !run.tint && !run.code)),
+    // leaving colour to code, to the words a click added and to a hyperlink inside the phrase. A
+    // closer is tinted like those words. While a letter covers the phrase it stays underlined, whatever
+    // the look, and the letter's own colours stand alone.
+    ...(run.link && (run.isLetter || run.isAfterLetter ? { underline: true } : lookProps(look, !run.tint && !run.code && run.href === undefined))),
     // A hyperlink is underlined in the suggestion colour, so it is not read as a stretch to press.
     ...(run.href !== undefined && { underline: true, color: 'suggestion' }),
     // A letter is drawn bold on the theme's error colour, and the rest of its short form or « on its

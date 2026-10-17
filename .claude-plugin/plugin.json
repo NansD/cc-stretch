@@ -13,7 +13,7 @@
     "highlight": {
       "type": "string",
       "title": "Closed stretch highlight",
-      "description": "Background of a phrase you can open, as a hex colour such as #264f78. Its text turns near black or near white, whichever reads better. Empty for none.",
+      "description": "Background of a phrase you can open, as a hex colour such as #264f78, in any case. Its text turns near black or near white, whichever reads better. Empty for none.",
       "default": ""
     }
   }

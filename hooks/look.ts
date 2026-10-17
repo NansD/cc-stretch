@@ -1,7 +1,7 @@
 // How a phrase the reader can press is marked: text marks that turn on or off one by one, and a
 // highlight. Shared by the hooks module, the reply and the toolbar.
 
-import { contrastOn } from './contrast'
+import { contrastOn, luminanceOf } from './contrast'
 
 /** Every text mark a phrase can carry, in the order the toolbar shows them. */
 export const MARK_NAMES = ['bold', 'italic', 'underline', 'strikethrough', 'dim'] as const
@@ -15,6 +15,12 @@ export const DEFAULT_LOOK: Look = { marks: ['underline'], highlight: '' }
 
 const textOf = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
 
+/** A highlight as one spelling: a hex colour in lower case, so `#264F78` and `#264f78` are one colour. */
+const highlightOf = (value: unknown): string => {
+  const text = textOf(value)
+  return luminanceOf(text) === undefined ? text : text.toLowerCase()
+}
+
 /** The marks named in a list (commas or spaces, any case), in toolbar order, unknown names dropped. */
 export function marksOf(value: unknown): Mark[] {
   const names = textOf(value).toLowerCase().split(/[\s,;]+/)
@@ -24,13 +30,13 @@ export function marksOf(value: unknown): Mark[] {
 /**
  * The look the options set. `marks` left empty keeps the default underline, so a highlight alone
  * adds to it; `none` takes every mark away. A value that names no mark (a typo) keeps the default
- * too, so stretches never lose their mark by accident.
+ * too, so stretches never lose their mark by accident. A hex highlight is read in lower case.
  */
 export function lookOf(options: Record<string, unknown>): Look {
   const named = textOf(options.marks)
   const parsed = marksOf(named)
   const marks = named.toLowerCase() === 'none' ? [] : parsed.length > 0 ? parsed : DEFAULT_LOOK.marks
-  return { marks, highlight: textOf(options.highlight) }
+  return { marks, highlight: highlightOf(options.highlight) }
 }
 
 /** The `marks` setting that reads back as `marks`: `none` for none, as an empty one means the default. */
@@ -42,7 +48,7 @@ export function marksSetting(marks: readonly Mark[]): string {
 export function storedLook(value: unknown): Look | null {
   if (typeof value !== 'object' || value === null || !Array.isArray((value as { marks?: unknown }).marks)) return null
   const { marks, highlight } = value as { marks: unknown[]; highlight?: unknown }
-  return { marks: marksOf(marks.join(',')), highlight: textOf(highlight) }
+  return { marks: marksOf(marks.join(',')), highlight: highlightOf(highlight) }
 }
 
 /** Whether two looks draw a phrase the same. */
@@ -51,8 +57,8 @@ export function isSameLook(a: Look, b: Look): boolean {
 }
 
 /**
- * The text props a look gives a pressable phrase. Dim and the highlight leave a tinted closer and
- * code alone; on a highlight the text turns dark or light so it reads.
+ * The text props a look gives a pressable phrase. Dim and the highlight leave a tinted closer, code
+ * and a hyperlink inside the phrase alone; on a highlight the text turns dark or light so it reads.
  */
 export function lookProps(look: Look, isPlainText: boolean) {
   const has = (mark: Mark) => look.marks.includes(mark)

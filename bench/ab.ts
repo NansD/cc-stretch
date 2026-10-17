@@ -4,15 +4,18 @@
 // of the reply's must-know points a blind reader of the shortest version still takes away.
 //   bun bench/ab.ts corpus --per-project 15 <~/.claude/projects/<dir>>...      freezes bench/out/corpus.jsonl
 //   bun bench/ab.ts run --out <dir> --arm <variant>... [--repeats 3] [--writer haiku]
-//                        [--judge haiku] [--effort <level>] [--concurrency 4] [--limit n]
+//                        [--judge haiku|none] [--effort <level>] [--concurrency 4] [--limit n]
 //   bun bench/ab.ts report --out <dir>                                          prints the comparison
 // Each of these three takes --corpus <file> to use a corpus other than bench/out/corpus.jsonl.
 // The tasks commands compare guides on replies written from scratch instead: each arm answers every
-// task in tasks.ts, and a judge checks each answer, closed and open, against the task's key. Haiku
+// task in tasks.ts (or those named with --task, or read from --tasks), and a judge checks each answer,
+// closed and open, against the task's key. With --judge none, run and tasks only write. Haiku
 // writes no stretch unless a prompt asks for them (as of Claude Code 2.1.301), so it cannot write here.
 //   bun bench/ab.ts tasks --out <dir> --arm <variant>... [--repeats 1] [--writer opus]
-//                         [--judge haiku] [--effort <level>] [--concurrency 4] [--limit n]
+//                         [--judge haiku|none] [--effort <level>] [--concurrency 4] [--tasks <file>] [--task <id>...] [--limit n]
 //   bun bench/ab.ts tasks-report --out <dir>                                    prints the comparison
+//   bun bench/ab.ts tasks --out <dir> --arm g0 --arm shortened --judge none       generates only
+//   bun bench/ab.ts compare --out <dir> [--corpus <file>]                         writes comparison.html, with no scores
 //   bun bench/ab.ts override --out <dir> --arm <a> --repeat <n> --task <id> --rule <rule> --holds true|false --reason <why>
 //                                    records a person's verdict on one layout rule for one answer
 // An arm is a guide variant named in guides.ts. A run's first start freezes its inputs in
@@ -30,16 +33,18 @@ import { parseArgs } from 'node:util'
 import { growthOf } from '../hooks/grow.ts'
 import { drawnAs, parse, stretches } from '../hooks/parse.ts'
 import { ANSWER, CHECK, claimsOf, claudeArgs, gradesOf, KEY, LABELS, pointsOf, POINTS, READ, readChecks, readKey, readLabels, readPoints, resultOf, REWRITE } from './grading.ts'
-import type { Claim, Grade } from './grading.ts'
+import type { Claim, Grade, Label } from './grading.ts'
 import { VARIANTS } from './guides.ts'
 import { differences, messageOf, readManifest, rowsOf } from './manifest.ts'
 import type { Manifest } from './manifest.ts'
 import { draw, marked, recall, render, VALID_RECALL, words } from './measure.ts'
 import { adjudicate, isRuleId, verdictsOf } from './rules.ts'
 import type { Override, RuleId } from './rules.ts'
-import { stringsOf, TASKS } from './tasks.ts'
+import { readTask, stringsOf, TASKS } from './tasks.ts'
 import type { Task } from './tasks.ts'
 import { turnsOf } from './transcripts.ts'
+import { comparisonHtml } from './comparison.ts'
+import type { ComparisonAnswer } from './comparison.ts'
 
 const REPO = new URL('..', import.meta.url).pathname
 /**
@@ -62,23 +67,24 @@ const fail = (message: string): never => {
 
 // ---- Commands and their flags ------------------------------------------------------------------
 
-type Flag = 'out' | 'arm' | 'repeats' | 'writer' | 'judge' | 'effort' | 'concurrency' | 'limit' | 'corpus' | 'per-project' | 'repeat' | 'task' | 'rule' | 'holds' | 'reason'
-type Command = { flags: readonly Flag[]; run: () => void | Promise<void>; isArmList?: true; hasDirs?: true }
+type Flag = 'out' | 'arm' | 'repeats' | 'writer' | 'judge' | 'effort' | 'concurrency' | 'limit' | 'corpus' | 'per-project' | 'repeat' | 'task' | 'tasks' | 'rule' | 'holds' | 'reason'
+type Command = { flags: readonly Flag[]; run: () => void | Promise<void>; repeatable?: readonly Flag[]; hasDirs?: true }
 const RUN_FLAGS: readonly Flag[] = ['out', 'arm', 'repeats', 'writer', 'judge', 'effort', 'concurrency', 'limit']
 // Each command takes only its own flags, so a misspelt one stops the run instead of being ignored. A
 // run compares several arms; an override names one answer, so one arm.
 const COMMANDS: Map<string, Command> = new Map([
   ['corpus', { flags: ['per-project', 'corpus'], run: corpus, hasDirs: true }],
-  ['run', { flags: [...RUN_FLAGS, 'corpus'], run: runAll, isArmList: true }],
+  ['run', { flags: [...RUN_FLAGS, 'corpus'], run: runAll, repeatable: ['arm'] }],
   ['report', { flags: ['out', 'corpus'], run: report }],
-  ['tasks', { flags: RUN_FLAGS, run: runTasks, isArmList: true }],
+  ['tasks', { flags: [...RUN_FLAGS, 'task', 'tasks'], run: runTasks, repeatable: ['arm', 'task'] }],
   ['tasks-report', { flags: ['out'], run: tasksReport }],
+  ['compare', { flags: ['out', 'corpus'], run: compare }],
   ['override', { flags: ['out', 'arm', 'repeat', 'task', 'rule', 'holds', 'reason'], run: override }],
 ])
 const [command = '', ...rest] = process.argv.slice(2)
 const chosen: Command = COMMANDS.get(command) ?? fail(`usage: bun bench/ab.ts ${[...COMMANDS.keys()].join('|')} ...`)
 type Parsed = { values: Record<string, string | boolean | (string | boolean)[] | undefined>; positionals: string[] }
-const isMultiple = (name: Flag) => name === 'arm' && chosen.isArmList === true
+const isMultiple = (name: Flag) => chosen.repeatable?.includes(name) === true
 const { values: flags, positionals }: Parsed = ((): Parsed => {
   try {
     const parsed = parseArgs({
@@ -168,10 +174,13 @@ async function attempt<T extends Record<string, unknown>>(file: string, slot: Re
   }
 }
 
+/** The SHA-256 of the code that defines what Claude is asked. */
+const askingCode = () => sha256(ASKING_CODE.map(file => readFileSync(join(REPO, file), 'utf8')).join('\n'))
+
 /** The manifest these inputs make, with the code and versions they run against. */
 function manifestOf(fields: Omit<Manifest, 'claude' | 'code' | 'revision'>): Manifest {
   const claudeVersion = execFileSync('claude', ['--version'], { encoding: 'utf8' }).trim()
-  const code = sha256(ASKING_CODE.map(file => readFileSync(join(REPO, file), 'utf8')).join('\n'))
+  const code = askingCode()
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: REPO, encoding: 'utf8' }).trim()
   const isDirty = execFileSync('git', ['status', '--porcelain', '--', 'hooks', 'bench'], { cwd: REPO, encoding: 'utf8' }).trim() !== ''
   return { ...fields, claude: claudeVersion, code, revision: { commit, isDirty } }
@@ -313,12 +322,12 @@ function shape(original: string, text: string) {
   }
 }
 
-/** How many links are in view, and how many of their short forms the judge calls labels. */
-async function labelsIn(judge: string, text: string): Promise<{ labels: number; linksInView: number }> {
+/** How many links are in view, how many of their short forms the judge calls labels, and its verdict on each in order. */
+async function labelsIn(judge: string, text: string): Promise<{ labels: number; linksInView: number; labelVerdicts: Label[] }> {
   const { skim, longs } = marked(text)
-  if (longs.length === 0) return { labels: 0, linksInView: 0 }
+  if (longs.length === 0) return { labels: 0, linksInView: 0, labelVerdicts: [] }
   const verdicts = readLabels((await claude('judge', judge, LABELS(skim, longs))).text, longs.length)
-  return { labels: verdicts.filter(v => v === 'label').length, linksInView: longs.length }
+  return { labels: verdicts.filter(v => v === 'label').length, linksInView: longs.length, labelVerdicts: verdicts }
 }
 
 const score = (v: Grade) => (v === 'yes' ? 1 : v === 'partly' ? 0.5 : 0)
@@ -429,12 +438,14 @@ async function runAll() {
   const points = pointsByReply(pointRows)
   const rewrites = textsOf(rewriteRows)
   const judged = new Set(judgedRows.filter(isOk).map(keyOf))
+  const isGrading = judge !== 'none'
+  const settled = isGrading ? judged : rewrites
   noteModels('writer', rewriteRows)
   noteModels('judge', [...pointRows, ...judgedRows])
 
   // Each reply's must-know points come from its original, once, so every arm is checked against the
   // same list. They are all in place before any rewrite; a reply still without them waits for a resume.
-  const isStopped = await runJobs(replies.filter(r => !points.has(r.id)).map(r => async () => {
+  const isStopped = isGrading && await runJobs(replies.filter(r => !points.has(r.id)).map(r => async () => {
     const found = await attempt(pointsFile, { id: r.id }, async () => {
       const answer = await claude('judge', judge, POINTS(r.reply))
       return { models: answer.models, points: readPoints(answer.text) }
@@ -448,19 +459,20 @@ async function runAll() {
   for (let repeat = 1; repeat <= repeats; repeat++) {
     for (const r of replies) {
       const list = points.get(r.id)
-      if (list === undefined) continue
+      if (isGrading && list === undefined) continue
       for (const arm of arms) {
         const slot = { arm: arm.name, repeat, id: r.id }
-        if (judged.has(keyOf(slot))) continue
+        if (settled.has(keyOf(slot))) continue
         jobs.push(async () => {
           const text = rewrites.get(keyOf(slot)) ?? (await attempt(rewritesFile, { ...slot, guide: sha256(arm.guide) }, () =>
             claude('writer', writer, REWRITE(r.reply), { system: arm.guide, ...(effort !== undefined && { effort }) }))).text
+          if (!isGrading || list === undefined) return
           if (shape(r.reply, text).recall < VALID_RECALL) return
           await attempt(judgedFile, slot, async () => {
-            const { labels, linksInView } = await labelsIn(judge, text)
+            const { labels, linksInView, labelVerdicts } = await labelsIn(judge, text)
             const notes = await claude('judge', judge, READ(render(text, new Set())))
             const check = await claude('judge', judge, CHECK(list, notes.text))
-            return { models: check.models, labels, linksInView, verdicts: readChecks(check.text, list.length) }
+            return { models: check.models, labels, linksInView, labelVerdicts, verdicts: readChecks(check.text, list.length) }
           })
         })
       }
@@ -477,7 +489,22 @@ async function runTasks() {
   const judge = flag('judge') ?? 'haiku'
   const effort = flag('effort')
   const concurrency = count('concurrency', 4)
-  const tasks = TASKS.slice(0, count('limit', Infinity))
+  let available = TASKS
+  const tasksFile = flag('tasks')
+  if (tasksFile !== undefined) {
+    try {
+      const input: unknown = JSON.parse(readFileSync(tasksFile, 'utf8'))
+      if (!Array.isArray(input) || input.length === 0) return fail('--tasks wants a nonempty JSON array of tasks')
+      available = input.map(readTask)
+      if (new Set(available.map(task => task.id)).size !== available.length) return fail('--tasks contains duplicate task ids')
+    } catch (error) {
+      return fail(`--tasks ${tasksFile}: ${messageOf(error)}`)
+    }
+  }
+  const selected = stringsOf(flags.task)
+  const unknown = selected?.find(id => !available.some(task => task.id === id))
+  if (unknown !== undefined) return fail(`no task named ${unknown}; available tasks: ${available.map(task => task.id).join(', ')}`)
+  const tasks = available.filter(task => selected === undefined || selected.includes(task.id)).slice(0, count('limit', Infinity))
   // The flags are all checked by now, so a refused start leaves no folder behind.
   lock(out)
   openRun(out, manifestOf({
@@ -490,10 +517,12 @@ async function runTasks() {
   const answerRows = rows(answersFile), gradedRows = rows(gradedFile)
   const answers = textsOf(answerRows)
   const graded = new Set(gradedRows.filter(isOk).map(keyOf))
+  const isGrading = judge !== 'none'
+  const settled = isGrading ? graded : answers
   noteModels('writer', answerRows)
   noteModels('judge', gradedRows)
-  const grade = async (text: string, know: string[], never: string[]) => {
-    const answer = await claude('judge', judge, KEY(text, know, never))
+  const grade = async (text: string, know: string[], never: string[], question?: string) => {
+    const answer = await claude('judge', judge, KEY(text, know, never, question))
     return { ...readKey(answer.text, know.length, never.length), models: answer.models }
   }
 
@@ -503,16 +532,18 @@ async function runTasks() {
     for (const task of tasks) {
       for (const arm of arms) {
         const slot = { arm: arm.name, repeat, id: task.id }
-        if (graded.has(keyOf(slot))) continue
+        if (settled.has(keyOf(slot))) continue
         jobs.push(async () => {
           const text = answers.get(keyOf(slot)) ?? (await attempt(answersFile, { ...slot, guide: sha256(arm.guide) }, () =>
             claude('writer', writer, ANSWER(task), { system: arm.guide, ...(effort !== undefined && { effort }) }))).text
+          if (!isGrading) return
           await attempt(gradedFile, slot, async () => {
-            const { labels, linksInView } = await labelsIn(judge, text)
-            const closed = await grade(render(text, new Set()), task.key.know, task.key.never)
-            const opened = await grade(render(text, 'all'), [...task.key.know, ...task.key.defer], task.key.never)
+            const { labels, linksInView, labelVerdicts } = await labelsIn(judge, text)
+            const question = task.kind === 'rewrite' ? undefined : task.question
+            const closed = await grade(render(text, new Set()), task.key.know, task.key.never, question)
+            const opened = await grade(render(text, 'all'), [...task.key.know, ...task.key.defer], task.key.never, question)
             return {
-              models: closed.models, labels, linksInView,
+              models: closed.models, labels, linksInView, labelVerdicts,
               skim: { know: closed.know, never: closed.never },
               full: { know: opened.know.slice(0, task.key.know.length), defer: opened.know.slice(task.key.know.length), never: opened.never },
             }
@@ -570,9 +601,59 @@ function gradedOf(row: unknown, task: Task): Graded {
   }
 }
 
+/** Writes a reading view using only frozen prompts and saved answers, never grades. */
+function compare() {
+  const out = outDir()
+  const run = frozenRun(out)
+  if (askingCode() !== run.code) {
+    return fail('the code defining the inputs differs from this run; use its original source to render the comparison')
+  }
+  const arms = Object.keys(run.arms)
+  if (arms.length !== 2) return fail('compare wants a run with exactly two guide variants')
+  const guides = arms.map(name => {
+    const text = readFileSync(join(out, `guide-${name}.txt`), 'utf8')
+    if (sha256(text) !== run.arms[name]) return fail(`guide-${name}.txt differs from the frozen guide`)
+    return { name, text }
+  })
+  let inputs: { id: string; prompt: string }[]
+  if (run.command === 'tasks' && run.tasks !== undefined) {
+    inputs = run.tasks.map(task => ({ id: task.id, prompt: ANSWER(task) }))
+  } else {
+    if (sha256(readFileSync(corpusFile, 'utf8')) !== run.corpus?.sha256) return fail('the corpus differs from the frozen run')
+    const ids = new Set(run.corpus.ids)
+    inputs = corpusReplies().filter(r => ids.has(r.id)).map(r => ({ id: r.id, prompt: REWRITE(r.reply) }))
+  }
+  const saved = rows(join(out, run.command === 'tasks' ? 'answers.jsonl' : 'rewrites.jsonl'))
+  const latest = new Map(saved.map(row => [keyOf(row), row]))
+  const cases = repeatsOf(run).flatMap(repeat => inputs.map(input => ({
+    name: `${input.id} · repeat ${repeat}`,
+    input: input.prompt,
+    answers: arms.map((arm): ComparisonAnswer => {
+      const row = latest.get(at(arm, repeat, input.id))
+      if (row === undefined) return { arm, unavailable: 'Not generated.' }
+      if (get(row, 'status') === 'error') {
+        const reason = get(row, 'reason')
+        if (typeof reason !== 'string') return fail(`saved failure for ${input.id} has no reason`)
+        return { arm, unavailable: `Generation failed: ${reason}` }
+      }
+      const text = get(row, 'text')
+      if (!isOk(row) || typeof text !== 'string') return fail(`saved answer for ${input.id} is malformed`)
+      if (get(row, 'guide') !== run.arms[arm]) return fail(`saved answer for ${input.id} has a different guide`)
+      return { arm, text }
+    }),
+  })))
+  const file = join(out, 'comparison.html')
+  writeFileSync(file, comparisonHtml({
+    title: 'Guide comparison', guides, cases,
+    description: `Writer: ${run.writer}. Effort: ${run.effort}. ${run.claude}. Compare the first reading, expanded text, or original syntax.`,
+  }))
+  console.log(file)
+}
+
 function tasksReport() {
   const out = outDir()
   const run = frozenRun(out)
+  if (run.judge === 'none') return fail('this run has no grades; use `compare --out <dir>` to read the answers')
   if (run.command !== 'tasks' || run.tasks === undefined) return fail(`${out} is not a tasks run`)
   const arms = Object.keys(run.arms)
   const answerRows = rows(join(out, 'answers.jsonl')), gradedRows = rows(join(out, 'graded.jsonl'))
@@ -686,6 +767,7 @@ function tasksReport() {
 function report() {
   const out = outDir()
   const run = frozenRun(out)
+  if (run.judge === 'none') return fail('this run has no grades; use `compare --out <dir>` to read the answers')
   if (run.command !== 'run' || run.corpus === undefined) return fail(`${out} is not a corpus run`)
   if (sha256(readFileSync(corpusFile, 'utf8')) !== run.corpus.sha256) fail(`${corpusFile} is not the corpus this run started with`)
   const arms = Object.keys(run.arms)

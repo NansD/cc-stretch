@@ -69,15 +69,40 @@ answers two ways:
   item stays visible with a stretch of its own. Each rule names the bullet it checks. Rules call no
   model and are worked out again whenever a report runs, so fixing a rule rescores every earlier run.
 - **Grades** (`grading.ts`): a model judge, never told which guide wrote what, checks the skim and
-  the full answer against each task's key. These are saved, since each one costs a call.
+  the full answer against each task's key. These grades are saved, since each one costs a call, with
+  the judge's verdict on each link beside the count. The judge sees the task's question, when there
+  is one, which resolves references but cannot supply results, and accepts a correct command as a
+  full answer.
 
 ```
-bun bench/ab.ts tasks --out bench/out/<run> --arm g0 --arm g7 [--repeats 2] [--writer opus] [--judge sonnet] [--effort medium]
+bun bench/ab.ts tasks --out bench/out/<run> --arm g0 --arm no-length-rule [--repeats 2] [--writer opus] [--judge sonnet] [--effort medium]
 bun bench/ab.ts tasks-report --out bench/out/<run>
-bun bench/ab.ts override --out bench/out/<run> --arm g7 --repeat 1 --task cache-options --rule items-stay-visible --holds true --reason "<why the rule is wrong here>"
+bun bench/ab.ts override --out bench/out/<run> --arm no-length-rule --repeat 1 --task cache-options --rule items-stay-visible --holds true --reason "<why the rule is wrong here>"
 ```
 
-It runs under `bun`, because the plugin's hooks import each other without file extensions. An arm
+This example compares `g0` with `no-length-rule`, which drops the fixed sentence limit. `g7` would
+add nothing: the plugin guide already holds its list line, so `g7` equals `g0`.
+
+To read the answers before choosing how to grade them, pass `--judge none` to `tasks` or `run`: it
+writes replies and makes no judge call. `compare` then writes `comparison.html`, with both frozen
+guides and every input beside its two outputs, shown as first read, fully opened, or as written.
+Failed generations stay visible, and the page has no scores. It needs a run with exactly two arms,
+and refuses one whose guides or input code changed; corpus runs take `--corpus` here too.
+`tasks-report` and `report` refuse such a run, and its folder cannot be graded later: a different
+`--judge` is a changed input, so grade in a new `--out`.
+
+```
+bun bench/ab.ts tasks --out bench/out/short-guide --arm g0 --arm shortened --judge none --writer opus --effort xhigh
+bun bench/ab.ts compare --out bench/out/short-guide
+```
+
+`--tasks <file>` replaces the task list with a JSON array of tasks shaped like those in `tasks.ts`,
+for reproductions that stay private. `--task <id>`, repeated, runs only the named tasks, in the
+list's order; `--limit` applies after it. An unknown id, or an empty, malformed or duplicated task
+file, is refused before any model call. The manifest freezes the tasks chosen, so changing them
+needs a new `--out`.
+
+`ab.ts` runs under `bun`, because the plugin's hooks import each other without file extensions. An arm
 is a variant named in `guides.ts`. The first run freezes its inputs in `<run>/manifest.json`. A
 second run with the same inputs picks up where the first stopped; one with any other input (a
 guide, a task, the writer or judge, the Claude Code version, or what Claude is asked: the prompts and

@@ -7,12 +7,13 @@ import { growthOf } from '../hooks/grow.ts'
 import { HEADING, LIST_ITEM, QUOTE, TABLE_ROW } from '../hooks/layout.ts'
 import { drawnAs, isOpenable, isRule, parse, stretches } from '../hooks/parse.ts'
 import type { Segment, Stretch } from '../hooks/parse.ts'
-import { draw } from './measure.ts'
+import { draw, words } from './measure.ts'
 import type { Layout } from './tasks.ts'
 
 export type RuleId =
   | 'keeps-short-words'
   | 'short-form-inline'
+  | 'short-form-has-words'
   | 'adds-words'
   | 'not-in-heading-or-table'
   | 'no-stretch-in-short-reply'
@@ -59,6 +60,18 @@ export const RULES: readonly Rule[] = [
       return broken && `the short form ${quoted(broken.short)} is not one plain line`
     },
   },
+  // As written by Opus 5.5 under Claude Code 2.1.302: words added after a finished sentence, linked
+  // by its period alone. A guide line that showed the sentence's last words as the link instead
+  // stopped most of these, and label sentences appeared where they had been.
+  {
+    id: 'short-form-has-words',
+    bullet: "The reader's screen draws each stretch as its short form, a link.",
+    appliesTo: () => true,
+    breach: ({ all }) => {
+      const bare = all.find(s => drawnAs(s) === 'link' && words(s.short) === 0)
+      return bare && `the link ${quoted(bare.short)} has no words to click`
+    },
+  },
   {
     id: 'adds-words',
     bullet: 'A stretch puts depth where it stands: its long form says more than its short form.',
@@ -97,11 +110,18 @@ export const RULES: readonly Rule[] = [
     bullet: "If other instructions require a closing block, make it the reply's last stretch.",
     appliesTo: task => task.closing !== undefined,
     breach: ({ parts }) => {
-      const last = [...parts].reverse().find(part => typeof part !== 'string' || part.trim() !== '')
+      const at = parts.findLastIndex(part => typeof part !== 'string')
+      const last = parts[at]
       if (last === undefined || typeof last === 'string') return 'the reply does not end in a stretch'
+      const tail = parts.slice(at + 1).flatMap(part => (typeof part === 'string' ? part.split('\n') : []))
+      if (!tail.every(line => line.trim() === '' || isRule(line))) return 'text follows the closing stretch'
       if (drawnAs(last) !== 'link') return `the reply ends in ${quoted(last.short)}, which is not a link`
       const dividers = draw(last.long ?? [], 'all').split('\n').filter(isRule).length
-      return dividers >= 2 ? undefined : `the last stretch, ${quoted(last.short)}, holds no block between two rules`
+      if (dividers >= 2) return undefined
+      // The block's separators can frame the final stretch without becoming part of its content.
+      const before = parts[at - 1]
+      const framed = typeof before === 'string' && isRule(before.trimEnd().split('\n').at(-1) ?? '') && tail.some(isRule)
+      return framed ? undefined : `the last stretch, ${quoted(last.short)}, holds no block between two rules`
     },
   },
 ]

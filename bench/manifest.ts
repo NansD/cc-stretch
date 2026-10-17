@@ -10,12 +10,13 @@ export type Manifest = {
   command: 'run' | 'tasks'
   repeats: number
   writer: string
+  /** The model that grades, or 'none' for a run that only writes. */
   judge: string
   /** The writer's effort flag, or 'default' when none was passed. */
   effort: string
   /** Each arm's guide, by its SHA-256; the text itself is saved beside the manifest. */
   arms: Record<string, string>
-  /** For `tasks`: every task, whole. */
+  /** For `tasks`: the tasks it was started with, whole: all of tasks.ts, those named with --task, or those read from --tasks. */
   tasks?: Task[]
   /** For `run`: the replies' ids and the corpus file's SHA-256. */
   corpus?: { ids: string[]; sha256: string }

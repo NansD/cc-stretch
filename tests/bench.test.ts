@@ -72,6 +72,14 @@ describe('layout rules', () => {
     ])
   })
 
+  test('short-form-has-words: a link is words, never punctuation alone', async () => {
+    cases('short-form-has-words', {}, ['It merged 3 days ago{{.|, and its e2e run passed.}}', 'Three approaches{{:|, each with its tradeoffs:}}'], [
+      'It {{merged|merged 3 days ago}}.',
+      '{{已合并。|三天前已合并。}}',
+      'Run {{`npm test` first|`npm test` first, then the build}}.',
+    ])
+  })
+
   test('adds-words: a stretch opens to something new', async () => {
     cases('adds-words', {}, ['- {{Memory is temporary.|Memory is temporary.}}', 'A {{b|}} c.'], ['- {{Memory is temporary.|Memory is temporary, and resets on restart.}}'])
   })
@@ -110,11 +118,17 @@ describe('layout rules', () => {
     cases('closing-block-last', { closing: 'End with a status block.' }, [
       `The parser is merged.\n\n${block}`,
       `The parser is merged.\n\n{{Status: parser done.|\n${block}}}\n\nThat is all.`,
-    ], [`The parser is merged.\n\n{{Status: parser done, export next.|\n${block}}}`])
+      'The parser is merged.\n\n---\n{{Status: parser done.|Done: the parser.\nNext: the export.}}',
+      'The parser is merged.\n\n{{Status: parser done.|Done: the parser.\nNext: the export.}}\n---',
+      'The parser is merged.\n\n---\n{{Status: parser done.|Done: the parser.\nNext: the export.}}\n---\nThat is all.',
+    ], [
+      `The parser is merged.\n\n{{Status: parser done, export next.|\n${block}}}`,
+      'The parser is merged.\n\n---\n{{Status: parser done.|Done: the parser.\nNext: the export.}}\n---',
+    ])
   })
 
   test('a rule a task does not ask for is not checked', async () => {
-    expect(verdictsOf('git log', {}).map(v => v.rule)).toEqual(['keeps-short-words', 'short-form-inline', 'adds-words', 'not-in-heading-or-table'])
+    expect(verdictsOf('git log', {}).map(v => v.rule)).toEqual(['keeps-short-words', 'short-form-inline', 'short-form-has-words', 'adds-words', 'not-in-heading-or-table'])
   })
 })
 
@@ -178,13 +192,14 @@ describe('tasks and guide variants', () => {
       for (const item of task.items ?? []) expect([task.id, item.length > 0 && item.every(word => word.trim() !== '')]).toEqual([task.id, true])
       expect([task.id, task.key.know.length > 0]).toEqual([task.id, true])
     }
-    expect(TASKS.filter(t => t.heldOut === true).map(t => t.id)).toEqual(['search-options-zh', 'auth-options', 'parser-status'])
+    expect(TASKS.filter(t => t.heldOut === true).map(t => t.id)).toEqual(['rollout-evidence', 'search-options-zh', 'auth-options', 'parser-status'])
   })
 
-  test('g0 is the plugin guide, and every other variant only adds its own lines after one bullet', async () => {
+  test('g0 is the plugin guide, and additive variants only add their declared lines', async () => {
     expect(VARIANTS.g0).toBe(GUIDE)
-    for (const [name, text] of Object.entries(VARIANTS)) {
-      const added = ADDED[name] ?? []
+    for (const [name, added] of Object.entries(ADDED)) {
+      const text = VARIANTS[name]
+      if (text === undefined) throw new Error(`missing guide ${name}`)
       const rows = text.split('\n')
       expect([name, rows.filter(row => !GUIDE.split('\n').includes(row))]).toEqual([name, [...added]])
       expect([name, rows.filter(row => !added.includes(row))]).toEqual([name, GUIDE.split('\n')])

@@ -8,7 +8,9 @@
 // an unproved fix, an untested environment, a limited scope, a destructive command, a required
 // order, several actions, an answer that is mostly code, a diagnosis, a decision and a status.
 // The tasks after those ask, in ordinary words, for answers that are lists, where a guide without a
-// rule for lists hid the whole list in one stretch; one rewrites a given reply instead. Held-out
+// rule for lists hid the whole list in one stretch; one rewrites a given reply instead. The last ones
+// give evidence that supports less than a reader would assume: a check run but not reported, a
+// proposal described as working, a release still under observation. Held-out
 // tasks are kept out of choosing a guide, so a report can show how the choice does on unseen ones.
 
 export type Task = {
@@ -126,7 +128,6 @@ The CI pipeline for this change is queued and has not started.`,
       defer: [
         'Locally, 0 of 200 runs failed after the change, against 3 of 200 before.',
         'The cause the change addresses: the file was read back before the write stream finished.',
-        'About 90 passing CI runs in a row would make it 95% likely the flake is gone.',
       ],
       never: ['The flaky test is fixed.', 'The change passes in CI.'],
     },
@@ -377,6 +378,86 @@ completed  success  main  "Move sessions to Redis" (3 days ago)`,
     question: 'List the three supported export formats. Names only.',
     evidence: 'The application exports CSV, JSON, and Parquet.',
     key: { know: ['The formats are CSV, JSON and Parquet.'], defer: [], never: [] },
+  },
+  {
+    id: 'verification-results',
+    question: 'What was verified on the exact commit?',
+    evidence:
+      'The working tree was clean at commit 9c31a7e for both checks. npm run typecheck exited 0. npm test reported 47 passed, 0 failed and exited 0. No browser tests were run on that commit.',
+    key: {
+      know: ['Typecheck and unit tests passed.', 'Browser tests were not run.'],
+      defer: ['The checked commit was 9c31a7e.', 'All 47 unit tests passed.'],
+      never: ['Browser tests passed.', 'Every test suite was run.'],
+    },
+  },
+  {
+    id: 'verification-summary',
+    question: 'Give me the verification summary for this change.',
+    evidence: `At clean commit 9c31a7e, npm run typecheck exited 0, and npm test passed all 47 unit tests.
+The unit tests cover parsing nested stretches, preserving literal code, and closing malformed input.
+The CLI smoke check also passed: a fresh run wrote its manifest, resuming identical inputs added no rows,
+and resuming changed inputs stopped before a model call. It used a stand-in model process.
+The same commit has not been tested with a real model or in a running terminal.
+The real-model run and terminal keyboard/resize checks remain to be done before release.
+All recorded checks refer to that commit; there are no later edits.`,
+    key: {
+      know: [
+        'Typecheck, unit tests and the CLI smoke check passed on the same commit.',
+        'The smoke check used a stand-in, so it does not show real-model behavior.',
+        'Real-model and running-terminal checks remain before release.',
+      ],
+      defer: ['The checked commit was 9c31a7e.', 'All 47 unit tests passed.', 'The smoke check covered fresh runs, unchanged resumes and refusal of changed inputs.'],
+      never: ['Real-model behavior was verified.', 'Terminal keyboard and resize behavior was verified.', 'The change is ready for release.'],
+    },
+  },
+  {
+    id: 'current-capabilities',
+    question: 'What is actually in place, and what would developer mode change?',
+    evidence: `The current application keeps draft edits in process memory. A restart loses those drafts.
+Only an explicit Save writes a file. The file writer takes a lock while saving; the lock is released
+when the save ends. There is no persistent editing lock and no background autosave.
+The proposed developer mode would save each edit to a local journal and replay it after a restart.
+That proposal has not been implemented or tested. It would not change save-time locking.
+The product sketch says drafts already survive restart, but the current implementation does not do that.`,
+    key: {
+      know: [
+        'Current drafts are lost on restart; only explicit Save persists them.',
+        'The current lock lasts only during a save.',
+        'Developer mode proposes a local journal for restart recovery, but it is not implemented.',
+      ],
+      defer: ['Developer mode would leave save-time locking unchanged.', 'The product sketch incorrectly describes current restart recovery.'],
+      never: ['Current drafts survive restart.', 'Developer mode already works.', 'An editing lock persists between saves.'],
+    },
+  },
+  {
+    id: 'unreported-check',
+    question: 'What was verified on this commit?',
+    evidence:
+      'At clean commit 7b92eac, typecheck exited 0 and all 84 unit tests passed. The CLI smoke run used a stand-in model. The browser resize check has not been run. No code changed after these checks.',
+    key: {
+      know: ['Typecheck and unit tests passed.', 'The outcome of the CLI smoke run is not given.', 'The browser resize check has not been run.'],
+      defer: ['All 84 unit tests passed.', 'The supplied record concerns commit 7b92eac.'],
+      never: ['The CLI smoke run passed.', 'The CLI smoke run failed.', 'The browser resize check passed.'],
+    },
+  },
+  {
+    id: 'rollout-evidence',
+    heldOut: true,
+    question: 'Can you sum up where the release stands?',
+    evidence: `The release candidate passed 63 integration tests in staging. The same artifact was then
+installed on one production canary, serving 5% of requests. Its first ten minutes showed no errors.
+The planned observation period is one hour, so fifty minutes remain. No rollback rehearsal has been run
+for this candidate. Full rollout is waiting for that rehearsal and the rest of the observation period.
+The other production instances still serve the previous release. No customer-wide success claim has been made.`,
+    key: {
+      know: [
+        'The candidate passed staging tests and is running on a 5% production canary.',
+        'Ten error-free minutes do not complete the required one-hour observation.',
+        'Full rollout is waiting for the remaining observation and a rollback rehearsal.',
+      ],
+      defer: ['Staging passed 63 integration tests.', 'The other instances still serve the previous release.'],
+      never: ['Full rollout is complete.', 'The rollback rehearsal passed.', 'The full observation period passed.'],
+    },
   },
   {
     id: 'search-options-zh',

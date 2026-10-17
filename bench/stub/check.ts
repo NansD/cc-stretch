@@ -3,9 +3,10 @@
 //   bun bench/stub/check.ts
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { readManifest } from '../manifest.ts'
 
 const STUB = new URL('.', import.meta.url).pathname
 const AB = new URL('../ab.ts', import.meta.url).pathname
@@ -177,6 +178,64 @@ mkdirSync(broken)
 writeFileSync(join(broken, 'manifest.json'), '{"command":"tasks"}')
 r = tasks(broken)
 check('an unreadable manifest is refused', r.status === 1 && r.output.includes('not a guide bench manifest'), r.output)
+
+// A focused comparison names tasks without changing the shared task list or resuming another set.
+const selected = join(scratch, 'selected')
+const select = (...ids: string[]) => bench(['tasks', '--out', selected, '--arm', 'g7', ...ids.flatMap(id => ['--task', id])])
+r = select('cache-options', 'brief')
+const selectedIds = r.status === 0 ? readManifest(readFileSync(join(selected, 'manifest.json'), 'utf8')).tasks?.map(t => t.id) : []
+check('named tasks run exactly the requested set in tasks.ts order', r.status === 0 && JSON.stringify(selectedIds) === JSON.stringify(['brief', 'cache-options']) && ok(selected, 'answers.jsonl') === 2, r.output)
+const selectedBefore = r.status === 0 ? snapshot(selected) : ''
+r = select('brief')
+check('resuming with another task selection is refused without writes', selectedBefore !== '' && r.status === 1 && r.output.includes('tasks.cache-options') && snapshot(selected) === selectedBefore, r.output)
+const unknownTask = join(scratch, 'unknown-task')
+r = bench(['tasks', '--out', unknownTask, '--arm', 'g7', '--task', 'no-such-task'])
+check('an unknown task is refused before creating a run', r.status === 1 && r.output.includes('no task named no-such-task') && !readdirSync(scratch).includes('unknown-task'), r.output)
+
+// Private reproductions can be supplied without adding their text to the shared task corpus.
+const taskFile = join(scratch, 'tasks.json')
+const external = { id: 'external-task', question: 'Name the cache options.', evidence: 'Memory, SQLite and Redis are available.', key: { know: ['Memory, SQLite and Redis are available.'], defer: [], never: [] } }
+writeFileSync(taskFile, JSON.stringify([external]))
+const supplied = join(scratch, 'supplied')
+const suppliedArgs = ['tasks', '--out', supplied, '--arm', 'g7', '--tasks', taskFile]
+r = bench(suppliedArgs)
+const suppliedIds = r.status === 0 ? readManifest(readFileSync(join(supplied, 'manifest.json'), 'utf8')).tasks?.map(t => t.id) : []
+check('a supplied task file replaces the default task list', r.status === 0 && JSON.stringify(suppliedIds) === '["external-task"]' && ok(supplied, 'answers.jsonl') === 1, r.output)
+const suppliedBefore = r.status === 0 ? snapshot(supplied) : ''
+writeFileSync(taskFile, JSON.stringify([{ ...external, question: 'Explain the cache options.' }]))
+r = bench(suppliedArgs)
+check('changing a supplied task refuses resume without writes', suppliedBefore !== '' && r.status === 1 && r.output.includes('tasks.external-task') && snapshot(supplied) === suppliedBefore, r.output)
+for (const input of [[], [external, external], [{ id: 'broken' }]]) {
+  writeFileSync(taskFile, JSON.stringify(input))
+  r = bench(['tasks', '--out', join(scratch, 'invalid-tasks'), '--arm', 'g7', '--tasks', taskFile])
+  check('invalid supplied tasks are refused before creating a run', r.status === 1 && !readdirSync(scratch).includes('invalid-tasks'), r.output)
+}
+
+// A generation-only run must make no judge call, including point extraction.
+// The stand-in refuses every grading prompt, so a stray call fails the run.
+const noJudge = { STUB_FAIL_MATCH: 'Output only JSON|Write down, as a short numbered list' }
+const blockedJudge = join(scratch, 'blocked-judge')
+r = tasks(blockedJudge, 'g0', noJudge, ['--limit', '1'])
+check('the no-judge test guard rejects a real grading attempt', r.status === 1 && ok(blockedJudge, 'answers.jsonl') === 1 && ok(blockedJudge, 'graded.jsonl') === 0, r.output)
+const ungraded = join(scratch, 'ungraded')
+const ungradedArgs = ['tasks', '--out', ungraded, '--arm', 'g0', '--arm', 'shortened', '--task', 'brief', '--judge', 'none']
+r = bench(ungradedArgs, noJudge)
+check('generation-only tasks write both answers without invoking a judge', r.status === 0 && ok(ungraded, 'answers.jsonl') === 2 && !existsSync(join(ungraded, 'graded.jsonl')), r.output)
+const ungradedBefore = snapshot(ungraded)
+r = bench(ungradedArgs, noJudge)
+check('generation-only resume reuses completed answers', r.status === 0 && snapshot(ungraded) === ungradedBefore, r.output)
+r = bench(['compare', '--out', ungraded], noJudge)
+check('comparison shows both frozen guides and the saved answers without grades', r.status === 0 && readFileSync(join(ungraded, 'comparison.html'), 'utf8').includes('No scores or rankings'), r.output)
+r = bench(['tasks-report', '--out', ungraded], noJudge)
+check('a score report refuses an ungraded run', r.status === 1 && r.output.includes('this run has no grades'), r.output)
+const incomplete = join(scratch, 'ungraded-incomplete')
+r = bench(['tasks', '--out', incomplete, '--arm', 'g0', '--arm', 'shortened', '--task', 'brief', '--judge', 'none'], { STUB_FAIL_MATCH: '.' })
+check('failed generations remain visible in a comparison', r.status === 1 && bench(['compare', '--out', incomplete]).status === 0 && readFileSync(join(incomplete, 'comparison.html'), 'utf8').includes('Generation failed:'), r.output)
+const rawCorpus = join(scratch, 'ungraded-corpus.jsonl')
+writeFileSync(rawCorpus, JSON.stringify({ id: 'one', project: 'sample', session: 'session', turn: 0, reply: 'Memory is fast. SQLite persists. Redis is shared.' }) + '\n')
+const rawRun = join(scratch, 'ungraded-rewrites')
+r = bench(['run', '--out', rawRun, '--corpus', rawCorpus, '--arm', 'g0', '--arm', 'shortened', '--repeats', '1', '--judge', 'none'], noJudge)
+check('generation-only rewriting skips point extraction and every judge', r.status === 0 && ok(rawRun, 'rewrites.jsonl') === 2 && !existsSync(join(rawRun, 'points.jsonl')) && !existsSync(join(rawRun, 'judged.jsonl')), r.output)
 
 console.log(failed === 0 ? `all cases hold (scratch: ${scratch})` : `${failed} cases failed (scratch: ${scratch})`)
 process.exit(failed === 0 ? 0 : 1)

@@ -20,11 +20,16 @@ reload the plugin: drawing, clicks and drags are proved in a live session.
 ## Driving a live session
 
 `film/recorder.mjs` holds the pattern. Open the pane with `wezterm cli spawn` and `split-pane`;
-type with `wezterm cli send-text --no-paste`; click by sending SGR mouse sequences at a cell's
-middle pixel (as of Claude Code 2.1.302 the session reads pointer positions in pixels); read every
+type with `wezterm cli send-text --no-paste`; click by sending SGR mouse sequences; read every
 screen with `wezterm cli get-text --escapes` and parse it with `film/screen.mjs`, which keeps
 colours, underline, inverse and OSC 8 links. Wait for what the screen should show, never a fixed
 delay: under load a redraw after a press took over a second.
+
+As of Claude Code 2.1.302 a session reads a click's position in cells, counted from 1, until its
+`--debug-file` log says `Mouse reports in pixels`, and in pixels from then on, at a cell's middle
+pixel. In these runs the switch came once a reply holding a stretch was drawn, so a click sent in
+pixels before that, such as on the style toolbar in a new session, is lost. Read the log before each
+click.
 
 ## Features
 

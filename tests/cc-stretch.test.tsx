@@ -7,6 +7,7 @@ import { contrastOn } from '../hooks/contrast'
 import { DEFAULT_LOOK, lookOf, storedLook } from '../hooks/look'
 import { layout, link, linkAt, tint, widthOf } from '../hooks/layout'
 import { closeAfter, hideLongForms, newStreamState, paragraphsOf, parse, stretches } from '../hooks/parse'
+import Reply from '../hooks/reply'
 
 const REPLY = [
   'The build fails {{on a stale cache|because the cache key hashes only `package.json`{{, set in one file|, set in `ci/cache.ts`}}}}.',
@@ -277,10 +278,27 @@ describe('layout', () => {
     const added = (word: string) => tint('#d3bdff', word)
     const text = `${added('Run')} ${added('`claude')} ${added('plugin')} install\` and ${added('[the')} ${added('docs')} page](https://x.invalid/a) now`
     const runs = layout(text, 80)[0] ?? []
-    expect(runs.map(run => run.text).join('')).toBe('Run claude plugin install and the docs page (https://x.invalid/a) now')
+    expect(runs.map(run => run.text).join('')).toBe('Run claude plugin install and the docs page now')
     expect(runs.filter(run => run.code).map(run => run.text)).toEqual(['claude plugin install'])
-    expect(runs.filter(run => run.underline).map(run => [run.text, run.tint])).toEqual([['the docs ', '#d3bdff'], ['page', undefined]])
+    expect(runs.filter(run => run.href).map(run => [run.text, run.tint, run.href])).toEqual([
+      ['the docs ', '#d3bdff', 'https://x.invalid/a'],
+      ['page', undefined, 'https://x.invalid/a'],
+    ])
     expect(runs.find(run => run.text.includes('and'))?.tint).toBeUndefined()
+  })
+
+  test('a bare URL is a hyperlink, without the punctuation that ends its sentence or a bracket it did not open', async () => {
+    const hrefs = (text: string) => (layout(text, 200)[0] ?? []).filter(run => run.href).map(run => [run.text, run.href])
+    expect(hrefs('See https://x.invalid/a/b?c=1. Then go.')).toEqual([['https://x.invalid/a/b?c=1', 'https://x.invalid/a/b?c=1']])
+    expect(hrefs('(see https://x.invalid/wiki/A_(b))')).toEqual([['https://x.invalid/wiki/A_(b)', 'https://x.invalid/wiki/A_(b)']])
+    expect(hrefs('no https:// host, nor xhttps://x.invalid')).toEqual([])
+    expect(hrefs('`https://x.invalid/code`')).toEqual([])
+  })
+
+  test('a markdown link to a target other than http:, https: or file: keeps it beside its label', async () => {
+    const runs = layout('Open [the file](ci/cache.ts) here', 80)[0] ?? []
+    expect(runs.map(run => run.text).join('')).toBe('Open the file (ci/cache.ts) here')
+    expect(runs.some(run => run.href)).toBe(false)
   })
 
   test('counts wide characters as two cells', async () => {
@@ -393,6 +411,110 @@ test('a press grows a stretch in place, nested ones too, and « shrinks it back'
   await ui.advance(2000)
   expect(await textIn(ui)).toContain(', set in one file «.')
   await ui.unmount()
+})
+
+describe('selecting text', () => {
+  /** Drags the left button from `from` to `to` in the paragraph, as a mouse does: down, a move, up. */
+  const drag = async (ui: Mounted, from: { x: number; y: number }, to: { x: number; y: number }, key = FIRST) => {
+    await ui.pointer({ type: 'down', ...from, button: 'left', in: key })
+    await ui.pointer({ type: 'move', ...to, button: 'left', in: key })
+    await ui.pointer({ type: 'up', ...to, button: 'left', in: key })
+  }
+  /** What reaches the clipboard. */
+  const clipboard = (on: On) => {
+    const copies: string[] = []
+    on('ui.copy', (_, e) => {
+      copies.push(e.text)
+      return { value: { isCopied: true } }
+    })
+    return copies
+  }
+
+  test('a drag across a paragraph that holds a stretch copies the text it crossed, drawn inverse', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    // "The build fails on a stale cache." then "Braces in code stay: {{a|b}}."
+    await drag(ui, { x: 4, y: 0 }, { x: 5, y: 1 })
+    expect(copies).toEqual(['build fails on a stale cache.\nBraces'])
+    const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+    expect(pieces.find(piece => piece.text === 'build fails ')?.props).toMatchObject({ inverse: true })
+    expect(pieces.find(piece => piece.text === 'The ')?.props).not.toHaveProperty('inverse')
+    // Nothing opened.
+    expect(await textIn(ui)).toBe('The build fails on a stale cache.\nBraces in code stay: {{a|b}}.')
+    await ui.unmount()
+  })
+
+  test('a drag backwards selects from where it came up to where it went down', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await drag(ui, { x: 14, y: 0 }, { x: 4, y: 0 })
+    expect(copies).toEqual(['build fails'])
+    await ui.unmount()
+  })
+
+  test('a line wrapped over several rows is copied as one line', async ($, on) => {
+    const copies = clipboard(on)
+    const text = '- A list item {{long enough|long enough}} that it wraps onto a second row here.'
+    const ui = await mountReply($, { columns: 30, rows: 40, isFullscreen: true }, text)
+    const rows = (await rowsOf(ui)).map(row => row.trimEnd())
+    expect(rows.length).toBeGreaterThan(1)
+    await drag(ui, { x: 0, y: 0 }, { x: 200, y: rows.length - 1 })
+    expect(copies).toEqual(['- A list item long enough that it wraps onto a second row here.'])
+    await ui.unmount()
+  })
+
+  test('a URL in a paragraph that holds a stretch is drawn as a hyperlink', async $ => {
+    const ui = await mountReply($, FULLSCREEN, 'Docs at https://x.invalid/docs and {{a stretch|a long stretch}}.')
+    const link = await ui.find({ type: 'Link', in: FIRST })
+    expect(link?.props).toMatchObject({ href: 'https://x.invalid/docs' })
+    expect(await textIn(ui)).toBe('Docs at https://x.invalid/docs and a stretch.')
+    await ui.unmount()
+  })
+
+  test('a click copies nothing, takes the highlight down, and on a short form still opens it', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await drag(ui, { x: 4, y: 0 }, { x: 9, y: 0 })
+    await drag(ui, { x: 1, y: 1 }, { x: 1, y: 1 })
+    expect(copies).toEqual(['build'])
+    expect((await ui.findAll({ type: 'Text', in: FIRST })).some(piece => piece.props.inverse === true)).toBe(false)
+    await pressOn(ui, 'on a stale cache')
+    await ui.advance(2000)
+    expect(await textIn(ui)).toContain('because the cache key hashes only package.json')
+    expect(copies).toEqual(['build'])
+    await ui.unmount()
+  })
+
+  test('a drag released off the paragraph, past any edge, still copies and leaves no highlight behind', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    for (const off of [{ x: 4, y: 30 }, { x: 4, y: -2 }, { x: -3, y: 1 }, { x: 150, y: 1 }]) {
+      await drag(ui, { x: 4, y: 0 }, off)
+      expect((await ui.findAll({ type: 'Text', in: FIRST })).some(piece => piece.props.inverse === true)).toBe(false)
+    }
+    expect(copies).toEqual([
+      'build fails on a stale cache.\nBraces in code stay: {{a|b}}.',
+      'The b',
+      'build fails on a stale cache.\nB',
+      'build fails on a stale cache.\nBraces in code stay: {{a|b}}.',
+    ])
+    await ui.unmount()
+  })
+})
+
+test('a paragraph drawn with props from the version before, which had no ask or letters, still draws', () => {
+  // What a first draw reads of its surface; Reply is called directly, as no mount hands it chosen props.
+  const surface = {
+    elements: { Box: 'Box', Text: 'Text' },
+    state: undefined as unknown,
+    setState(next: unknown) {
+      surface.state = next
+    },
+    onPointer() {},
+    every() {},
+  }
+  const drawn = Reply({ text: 'The build fails {{on a stale cache|because the key is stale}}.', open: [], tints: {} } as never, surface as never)
+  expect(JSON.stringify(drawn)).toContain('on a stale cache')
 })
 
 test('a click inside a stretch shrinking shut opens nothing', async ($, on) => {

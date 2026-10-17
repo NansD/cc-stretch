@@ -18,9 +18,22 @@ export type Run = {
   /** The colour of the words a stretch added. */
   tint?: string
   link?: { action: Action; key: string }
+  /** Where a markdown link or a bare URL goes, drawn as a hyperlink. */
+  href?: string
 }
 
 export type Row = Run[]
+
+/** How a row a line wrapped onto joins the row before it: what the break took out, and the lead's cells. */
+export type Continuation = { join: string; lead: number }
+
+// The rows a line wrapped onto, so a copy of several rows gives back the line as written.
+const continuations = new WeakMap<Row, Continuation>()
+
+/** How `row` continues the row before it, if a line wrapped onto it. */
+export function continuationOf(row: Row): Continuation | undefined {
+  return continuations.get(row)
+}
 
 // Noncharacters frame a pressable phrase or a tinted word in composed text: Unicode keeps them for a
 // program's own use, where the Private Use Area holds icons such as Nerd Font's. A start mark with no
@@ -299,9 +312,19 @@ function inline(text: string, tints: Line['tints'], isBold = false): Run[] {
     const markdownLink = /^\[([^\]\n]+)\]\(([^)\s]+)\)/.exec(text.slice(i))
     if (markdownLink) {
       const label = markdownLink[1] ?? ''
-      for (let k = 0; k < label.length; k++) emit(label[k] ?? '', i + 1 + k, { underline: true })
-      emit(` (${markdownLink[2] ?? ''})`, i + markdownLink[0].length - 1, { dim: true })
+      const href = markdownLink[2] ?? ''
+      // A target that opens the same from any folder is drawn as a link; any other keeps its target
+      // beside it. Claude Code 2.1.302's own markdown links a relative path too.
+      const isFollowed = /^(https?|file):/.test(href)
+      for (let k = 0; k < label.length; k++) emit(label[k] ?? '', i + 1 + k, isFollowed ? { href } : { underline: true })
+      if (!isFollowed) emit(` (${href})`, i + markdownLink[0].length - 1, { dim: true })
       i += markdownLink[0].length
+      continue
+    }
+    const url = ch === 'h' && !/\w/.test(text[i - 1] ?? ' ') ? bareUrlAt(text, i) : undefined
+    if (url !== undefined) {
+      for (let k = 0; k < url.length; k++) emit(url[k] ?? '', i + k, { href: url })
+      i += url.length
       continue
     }
     emit(ch, i)
@@ -309,6 +332,23 @@ function inline(text: string, tints: Line['tints'], isBold = false): Run[] {
   }
 
   return runs
+}
+
+/**
+ * The `http:` or `https:` URL written at `at`, without punctuation that ends the sentence after it
+ * or a closing bracket it did not open.
+ */
+function bareUrlAt(text: string, at: number): string | undefined {
+  let url = /^https?:\/\/[^\s<>`﷐-﷔]+/.exec(text.slice(at))?.[0]
+  if (url === undefined) return undefined
+  for (;;) {
+    const opened = url.split('(').length - 1
+    const closed = url.split(')').length - 1
+    if (/[.,;:!?'"*_]$/.test(url) || (url.endsWith(')') && closed > opened)) url = url.slice(0, -1)
+    else break
+  }
+
+  return /^https?:\/\/[^/]/.test(url) ? url : undefined
 }
 
 /**
@@ -332,14 +372,18 @@ function wrap(runs: Run[], width: number, first: string, rest: string, isDimLead
     used += widthOf(piece.text)
     isBare = false
   }
-  const breakRow = () => {
+  const breakRow = (isAtSpace = false) => {
     const last = row.at(-1)
+    let join = isAtSpace ? ' ' : ''
     if (last !== undefined && !isBare) {
-      last.text = last.text.trimEnd()
+      const trimmed = last.text.trimEnd()
+      if (trimmed !== last.text) join = ' '
+      last.text = trimmed
       if (last.text === '') row.pop()
     }
     rows.push(row)
     begin(rest)
+    continuations.set(row, { join, lead: used })
   }
 
   begin(first)
@@ -349,7 +393,7 @@ function wrap(runs: Run[], width: number, first: string, rest: string, isDimLead
       if (text.trim() === '') {
         if (isBare) continue
         if (used + widthOf(text) <= width) put({ ...run, text })
-        else breakRow()
+        else breakRow(true)
         continue
       }
       let word = text
@@ -387,6 +431,7 @@ function cutRows(runs: Run[], width: number): Row[] {
         rows.push(row)
         row = []
         used = 0
+        continuations.set(row, { join: '', lead: 0 })
       }
       const [head, tail] = cut(rest, width - used)
       row.push({ ...run, text: head })
@@ -416,6 +461,6 @@ function cut(text: string, room: number): [string, string] {
 function isSameStyle(a: Run, b: Run): boolean {
   return (
     a.bold === b.bold && a.italic === b.italic && a.code === b.code && a.underline === b.underline && a.dim === b.dim && a.tint === b.tint &&
-    a.link?.action === b.link?.action && a.link?.key === b.link?.key
+    a.link?.action === b.link?.action && a.link?.key === b.link?.key && a.href === b.href
   )
 }

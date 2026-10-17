@@ -362,6 +362,14 @@ export const register: Register = (on, options) => {
   // A paragraph's Client posts the stretches open in it whenever they change, and the one the reader
   // just opened. Kept here, they survive a redraw, reach the next prompt and keep their colours.
   on('ui.message', async ($, e, next) => {
+    // Text the reader dragged across in a paragraph, where as of Claude Code 2.1.302 the transcript
+    // selects nothing itself.
+    const copy = e.module.endsWith('reply.tsx') ? copyOf(e.data) : undefined
+    if (copy !== undefined) {
+      const copied = await $.ui.copy({ text: copy, surface: e.surface })
+      if (!copied.isCopied) $.ui.toast(`cc-stretch: the selection was not copied: ${copied.reason}`)
+      return next(e)
+    }
     const post = e.module.endsWith('reply.tsx') ? replyPostOf(e.data) : undefined
     if (post === undefined) return next(e)
     await update($, memberOf(openStretches, { requestId: `${e.requestId}#${e.element}` }), () => post.open)
@@ -517,6 +525,12 @@ function replyPostOf(data: unknown): ReplyPost | undefined {
   const { short, key } = opened
 
   return typeof short === 'string' && typeof key === 'string' ? { open, opened: { short, key } } : { open }
+}
+
+/** A Client's post of text to copy, if it is one. */
+function copyOf(data: unknown): string | undefined {
+  if (typeof data !== 'object' || data === null || !('copy' in data)) return undefined
+  return typeof data.copy === 'string' && data.copy !== '' ? data.copy : undefined
 }
 
 /** The text of the model's last reply: its rows after the person's last prompt. */

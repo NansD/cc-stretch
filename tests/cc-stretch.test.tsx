@@ -205,6 +205,21 @@ describe('streaming', () => {
     await ui.unmount()
   })
 
+  test('a reply filtered before the plugin loaded is found however far back, and one search keeps the rest', async ($, on) => {
+    const replies = Array.from({ length: 52 }, (_, i) => `Reply ${i}: {{short ${i}|long detail ${i}}}.`)
+    let searches = 0
+    on('session.messages', () => {
+      searches++
+      return { value: replies.map(text => ({ role: 'assistant' as const, text, toolUses: [] })) }
+    })
+    for (const [i, reply] of replies.slice(0, 2).entries()) {
+      const ui = await mountReply($, FULLSCREEN, hideLongForms(reply, newStreamState()))
+      expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === `short ${i}`)?.props).toMatchObject({ underline: true })
+      await ui.unmount()
+    }
+    expect(searches).toBe(1)
+  })
+
   test('a filtered reply that held no stretch is drawn by the engine, without a search', async ($, on) => {
     on('classic.MessageDisplay', () => ({}))
     on('session.surfaces', () => ({ value: ['terminal'] }))

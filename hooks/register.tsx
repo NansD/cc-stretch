@@ -69,8 +69,6 @@ const HREF = 'https://cc-stretch.invalid/'
 type Stream = { state: StreamState; raw: string; shown: string }
 /** How many filtered replies are kept by what they were shown as. */
 const KEPT_REPLIES = 200
-/** How many of the session's latest replies with a stretch are searched for one not kept. */
-const SEARCHED_REPLIES = 50
 
 /** The letters, in row order: home, top, bottom. */
 const LETTERS = 'asdfghjklqwertyuiopzxcvbnm'
@@ -101,7 +99,7 @@ const keyOf = (text: string) => text.replace(/\s+/g, '')
 // before the plugin last loaded is found among the session's messages instead.
 const unfiltered = new Map<string, string | null>()
 
-function remember({ raw, shown }: Stream): void {
+function remember({ raw, shown }: Pick<Stream, 'raw' | 'shown'>): void {
   setNewest(unfiltered, keyOf(shown), raw === shown ? null : raw, KEPT_REPLIES)
 }
 
@@ -120,9 +118,17 @@ async function rawOf($: EngineInterface, text: string): Promise<string | undefin
   const key = keyOf(text)
   const kept = unfiltered.get(key)
   if (kept !== undefined) return kept ?? undefined
+  // Not kept, as after the plugin loads again: every reply of the session is kept by what the filter
+  // shows of it, oldest first, so one search finds any reply and leaves the latest kept.
   const messages = await $.session.messages().catch(() => [])
-  const replies = messages.filter(message => message.role === 'assistant' && message.text.includes('{{')).slice(-SEARCHED_REPLIES)
-  return replies.find(message => keyOf(hideLongForms(message.text, newStreamState())) === key)?.text
+  let raw: string | undefined
+  for (const message of messages) {
+    if (message.role !== 'assistant') continue
+    const shown = hideLongForms(message.text, newStreamState())
+    remember({ raw: message.text, shown })
+    if (keyOf(shown) === key && shown !== message.text) raw = message.text
+  }
+  return raw
 }
 
 /**

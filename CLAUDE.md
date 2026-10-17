@@ -30,6 +30,9 @@ and in time a guide chosen for each model Claude Code runs.
 
 - `npm test` runs `claude plugin validate .` and `claude plugin test .`. As of Claude Code 2.1.302
   a test file may import only `claude-code`, `claude-code/testing` and the plugin's own files.
+- `claude plugin test .` runs every `*.test.ts` and `*.test.tsx` under the folder, git-ignored ones
+  too (as of Claude Code 2.1.302), so a copy of the plugin kept under `film/out/` runs its old tests
+  against today's hooks. Leave `tests/` out of such a copy.
 - `npx tsc -p .claude-plugin/types/tsconfig.json --noEmit` typechecks the hooks; its TS5097 errors
   come from the bench's `.ts` imports and are expected. Claude Code writes the plugin API's types into
   `.claude-plugin/types/` when it loads the plugin from this folder (`claude --plugin-dir .`).

@@ -6,6 +6,9 @@ import { closeAfter, codeSpan, hideLongForms, isLinkable, isOpenable, KEY_SEPARA
 import type { Segment, StreamState, Stretch } from './parse'
 import { targetsIn } from './layout'
 import type { Action } from './layout'
+import { contrastOn } from './contrast'
+import { lookOf, MARK_NAMES, storedLook } from './look'
+import type { Look, Mark } from './look'
 import type { ReplyPost, ReplyProps, Tint } from './reply'
 
 const openStretches = atom({ plugin: 'cc-stretch', key: 'open' } as const, [])
@@ -14,6 +17,16 @@ const stretchOrder = atom({ plugin: 'cc-stretch', key: 'order' } as const, { ord
 const newestReply = atom({ plugin: 'cc-stretch', key: 'newest' } as const, '')
 const askedStretch = atom({ plugin: 'cc-stretch', key: 'ask' } as const, null)
 const lettering = atom({ plugin: 'cc-stretch', key: 'lettering' } as const, null)
+const pickedLook = atom({ plugin: 'cc-stretch', key: 'look' } as const, null)
+/** Whether /stretch-style has the toolbar open. */
+const toolbarShown = atom({ plugin: 'cc-stretch', key: 'toolbar' } as const, false)
+
+// What the toolbar offers. Bright colours suit text on a dark theme; a highlight takes deep or bright,
+// its text turning light or dark to read on it.
+const PANEL_COLORS = {
+  deep: ['#264f78', '#1f3a5f', '#3b4261', '#4b3b6b', '#5c2a4a', '#5f2a2a', '#5c4a00', '#1e4d2b', '#1d4b4b'],
+  bright: ['#5fafff', '#87d7ff', '#d7afff', '#ff87af', '#ff8787', '#ffaf5f', '#ffd75f', '#afd787', '#5fd7af'],
+}
 
 // Claude Code 2.1.300 can start a session on the main screen even with fullscreen set, and the
 // variable overrides that.
@@ -102,7 +115,72 @@ async function rawOf($: EngineInterface, text: string): Promise<string | undefin
   return replies.find(message => keyOf(hideLongForms(message.text, newStreamState())) === key)?.text
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  const baseLook = lookOf(options)
+  // /stretch-style shows or hides the toolbar for this session.
+  on('session.start', { cwd: /./ }, async ($, e, next) => {
+    await $.command.register({ name: 'stretch-style', description: 'Show or hide a toolbar to try how closed stretches look' })
+    return next(e)
+  })
+
+  on('command.run', { command: 'stretch-style' }, async $ => {
+    const isShown = !(await read($, toolbarShown))
+    await update($, toolbarShown, () => isShown)
+    if (isShown) return { text: 'Stretch style toolbar shown above the prompt. Run /stretch-style again to hide it.' }
+    // On hiding, say how to keep the look picked, as the toolbar's pick lasts only for the session.
+    const look = storedLook(await read($, pickedLook))
+    if (look === null) return { text: 'Stretch style toolbar hidden.' }
+    const keep = JSON.stringify({ linkMarks: look.marks.length === 0 ? 'none' : look.marks.join(','), linkTextColor: look.text, linkHighlight: look.highlight })
+    return { text: `Stretch style toolbar hidden. To keep this look, set the plugin options to ${keep}.` }
+  })
+
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    // Terminal only: the desktop app draws each Button natively, where a colour swatch has no label.
+    if (e.surface !== 'terminal' || e.props.hasSurvey || !(await read($, toolbarShown))) return next(e)
+    const look = storedLook(await read($, pickedLook)) ?? baseLook
+    // Each press starts from the look as it is now, not as this draw saw it, so quick presses add up.
+    const change = (edit: (now: Look) => Partial<Look>) =>
+      update($, pickedLook, stored => {
+        const now = storedLook(stored) ?? baseLook
+        return { ...now, ...edit(now) }
+      })
+    const toggle = (mark: Mark) => change(now => ({ marks: now.marks.includes(mark) ? now.marks.filter(m => m !== mark) : [...now.marks, mark] }))
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const chosen = (isOn: boolean, label: string) => (isOn ? <Text bold>[{label}]</Text> : <Text>{label}</Text>)
+    // Swatches are two cells wide; the chosen one is marked ◆◆, a chosen word [like this].
+    const swatch = (part: 'text' | 'highlight', c: string) => {
+      const isOn = look[part] === c
+      return (
+        <Button plain key={`${part}-${c}`} onPress={() => change(() => ({ [part]: c }))}>
+          {part === 'text' ? <Text color={c}>{isOn ? '◆◆' : 'ab'}</Text> : <Text backgroundColor={c} {...contrastOn(c)}>{isOn ? '◆◆' : '  '}</Text>}
+        </Button>
+      )
+    }
+    // A plain Button draws its label alone, without padding, so a space goes between each two.
+    const row = (label: string, parts: unknown[]) => (
+      <Box key={`row-${label}`} flexWrap="wrap">
+        <Text dimColor>{label.padEnd(10)}</Text>
+        {parts.flatMap((part, i) => (i === 0 ? [part] : [<Text key={`gap-${label}-${i}`}> </Text>, part]))}
+      </Box>
+    )
+    return (
+      <Box flexDirection="column">
+        {row('style', [
+          ...MARK_NAMES.map(mark => <Button plain key={`mark-${mark}`} onPress={() => toggle(mark)}>{chosen(look.marks.includes(mark), mark)}</Button>),
+          <Button plain key="reset" onPress={() => update($, pickedLook, () => null)}>reset</Button>,
+        ])}
+        {row('text', [
+          <Button plain key="text-none" onPress={() => change(() => ({ text: '' }))}>{chosen(look.text === '', 'own colour')}</Button>,
+          ...PANEL_COLORS.bright.map(c => swatch('text', c)),
+        ])}
+        {row('highlight', [
+          <Button plain key="highlight-none" onPress={() => change(() => ({ highlight: '' }))}>{chosen(look.highlight === '', 'no highlight')}</Button>,
+          ...[...PANEL_COLORS.deep, ...PANEL_COLORS.bright].map(c => swatch('highlight', c)),
+        ])}
+      </Box>
+    )
+  })
+
   // While a reply streams, Claude Code draws its lines as they arrive, before the reply reaches
   // the AssistantMessage site below. Showing each stretch as its short form there too keeps the
   // raw markup from flashing past. One filter state per message, until its final flush; null for a
@@ -223,11 +301,13 @@ export const register: Register = on => {
       // A paragraph holding a stretch is drawn by a Client, on the screen's side; the rest is
       // Claude Code's own markdown.
       const { Box, Button, Client, Markdown, Text } = $.ui.resolve(e)
-      const [{ order, count }, newest, shown] = await Promise.all([
+      const [{ order, count }, newest, shown, picked] = await Promise.all([
         read($, memberOf(stretchOrder, { requestId: e.requestId })),
         read($, newestReply),
         read($, lettering),
+        read($, pickedLook),
       ])
+      const look = storedLook(picked) ?? baseLook
       // The theme matters only once a stretch in this reply is open and so tinted.
       const isLight =
         Object.keys(order).length > 0 &&
@@ -242,7 +322,7 @@ export const register: Register = on => {
           const [open, ask] = await Promise.all([read($, memberOf(openStretches, { requestId: member })), read($, memberOf(askedStretch, { requestId: member }))])
           const tints = tintsOf(order, key, newest === e.requestId ? count - 1 : -1, palette)
           const keys = Object.fromEntries((shown?.targets ?? []).filter(one => one.member === member).map(one => [one.key, one.letter]))
-          const props: ReplyProps = { text, open, tints, ask, letters: shown === null ? null : { action: shown.action, keys } }
+          const props: ReplyProps = { text, open, tints, ask, letters: shown === null ? null : { action: shown.action, keys }, look }
           return <Client key={key} module="./reply.tsx" props={props} width="100%" />
         }),
       )
@@ -462,4 +542,3 @@ function canPress<E extends Pick<RenderInput, 'surface' | 'viewport'>>(e: E): e 
 function isMainScreen(e: Pick<RenderInput, 'surface' | 'viewport'>): boolean {
   return e.surface === 'terminal' && e.viewport?.isFullscreen === false
 }
-

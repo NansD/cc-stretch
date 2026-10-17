@@ -81,6 +81,15 @@ never lose your place.
   and ctrl+↓ shows the app's windows by default. If your terminal or system takes both chords of
   one action, bind another to `app:diffFileListDown` or `app:diffFileListUp` in the `Global`
   context of `~/.claude/keybindings.json`.
+- **The marking is yours to pick.** Phrases you can open are underlined by default. Three plugin
+  options change that, in `/plugin`'s config or under `pluginConfigs` in settings: `linkMarks`, a
+  list of `bold`, `italic`, `underline`, `strikethrough`, `dim` and `inverse` (empty keeps the
+  underline, `none` removes every mark); `linkTextColor`, a hex colour or theme colour name; and
+  `linkHighlight`, a hex background whose text turns near black or near white, whichever reads
+  better. For example `"pluginConfigs": { "cc-stretch@cc-stretch": { "options": { "linkMarks":
+  "none", "linkHighlight": "#264f78" } } }`. To try looks first, run `/stretch-style`: a toolbar
+  above the prompt restyles every reply as you click, for the session, and running it again hides
+  the toolbar and prints the options for the look you picked.
 
 ## Limits
 

@@ -3,6 +3,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { grow } from '../hooks/grow'
+import { contrastOn } from '../hooks/contrast'
+import { DEFAULT_LOOK, lookOf, storedLook } from '../hooks/look'
 import { layout, link, linkAt, tint, widthOf } from '../hooks/layout'
 import { closeAfter, hideLongForms, newStreamState, paragraphsOf, parse, stretches } from '../hooks/parse'
 
@@ -331,6 +333,29 @@ describe('paragraphs', () => {
     const text = ['```', '```python', '', '{{a|b}}', '```', 'After.'].join('\n')
     expect(paragraphsOf(text)).toEqual([{ text, hasStretch: false }])
   })
+})
+
+test('linkMarks dim marks a pressable phrase dim instead of underlined', { options: { linkMarks: 'dim' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  expect(pieces.find(piece => piece.text === 'on a stale cache')?.props).toMatchObject({ dimColor: true })
+  expect(pieces.find(piece => piece.text === 'on a stale cache')?.props).not.toHaveProperty('underline')
+  await pressOn(ui, 'on a stale cache')
+  await ui.advance(2000)
+  expect(await textIn(ui)).toContain('because the cache key hashes only package.json')
+  await ui.unmount()
+})
+
+test('linkMarks none leaves a pressable phrase unmarked but still pressable', { options: { linkMarks: 'none' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  const phrase = pieces.find(piece => piece.text === 'on a stale cache')?.props
+  expect(phrase).not.toHaveProperty('underline')
+  expect(phrase).not.toHaveProperty('dimColor')
+  await pressOn(ui, 'on a stale cache')
+  await ui.advance(2000)
+  expect(await textIn(ui)).toContain('because the cache key hashes only package.json')
+  await ui.unmount()
 })
 
 test('a press grows a stretch in place, nested ones too, and « shrinks it back', async $ => {
@@ -946,4 +971,175 @@ describe('tool calls', () => {
       await ui.unmount()
     }
   })
+})
+
+test('the /stretch-style toolbar restyles replies live', async $ => {
+  await $.command.run({ command: 'stretch-style' })
+  const panel = await $.ui.mount({ plugin: 'cc-stretch', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false }, viewport: FULLSCREEN })
+  await panel.press({ key: 'mark-underline' })
+  await panel.press({ key: 'mark-bold' })
+  await panel.press({ key: 'highlight-#5c4a00' })
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  const phrase = pieces.find(piece => piece.text === 'on a stale cache')?.props
+  expect(phrase).toMatchObject({ bold: true, backgroundColor: '#5c4a00', color: '#f2f2f2' })
+  expect(phrase).not.toHaveProperty('underline')
+  await ui.unmount()
+  await panel.unmount()
+})
+
+
+test('a light highlight turns the phrase text dark', { options: { linkHighlight: '#ffd75f' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  expect(pieces.find(piece => piece.text === 'on a stale cache')?.props).toMatchObject({ backgroundColor: '#ffd75f', color: '#1c1c1c' })
+  await ui.unmount()
+})
+
+test('marks, text colour and highlight combine freely', { options: { linkMarks: 'italic,strikethrough', linkTextColor: '#87d7ff' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  const phrase = pieces.find(piece => piece.text === 'on a stale cache')?.props
+  expect(phrase).toMatchObject({ italic: true, strikethrough: true, color: '#87d7ff' })
+  expect(phrase).not.toHaveProperty('underline')
+  expect(phrase).not.toHaveProperty('backgroundColor')
+  await ui.unmount()
+})
+
+test('linkMarks none leaves a highlighted phrase without marks', { options: { linkMarks: 'none', linkHighlight: '#264f78' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  const phrase = pieces.find(piece => piece.text === 'on a stale cache')?.props
+  expect(phrase).toMatchObject({ backgroundColor: '#264f78', color: '#f2f2f2' })
+  expect(phrase).not.toHaveProperty('underline')
+  await ui.unmount()
+})
+
+test('a look stored by an older panel is ignored, not fatal', () => {
+  expect(storedLook({ style: 'highlight', color: '#5c4a00' })).toBeNull()
+  expect(storedLook(null)).toBeNull()
+  expect(storedLook({ marks: ['bold', 'nope'], text: '', highlight: '#264f78' })).toEqual({ marks: ['bold'], text: '', highlight: '#264f78' })
+})
+
+test('/stretch-style shows the toolbar', async ($, on) => {
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+  const result = await $.command.run({ command: 'stretch-style' })
+  expect(JSON.stringify(result)).toContain('shown')
+  const panel = await $.ui.mount({ plugin: 'cc-stretch', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false }, viewport: FULLSCREEN })
+  expect((await panel.findAll({ type: 'Button' })).length).toBeGreaterThan(0)
+  await panel.unmount()
+})
+
+/** The props of the first pressable phrase of the first paragraph. */
+const phraseProps = async (ui: Mounted) => (await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === 'on a stale cache')?.props
+
+const mountToolbar = ($: Engine) =>
+  $.ui.mount({ plugin: 'cc-stretch', surface: 'terminal', component: 'AbovePrompt', props: { hasSurvey: false }, viewport: FULLSCREEN })
+
+test('with no options, a pressable phrase is underlined and nothing else', async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const phrase = await phraseProps(ui)
+  expect(phrase).toMatchObject({ underline: true })
+  for (const prop of ['bold', 'italic', 'color', 'backgroundColor', 'dimColor', 'inverse', 'strikethrough']) expect(phrase).not.toHaveProperty(prop)
+  await ui.unmount()
+})
+
+test('a colour or a highlight alone keeps the default underline', { options: { linkHighlight: '#264f78' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  expect(await phraseProps(ui)).toMatchObject({ underline: true, backgroundColor: '#264f78' })
+  await ui.unmount()
+})
+
+test('an explicit text colour beats the contrast colour on a highlight', { options: { linkHighlight: '#ffd75f', linkTextColor: '#87d7ff' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  expect(await phraseProps(ui)).toMatchObject({ backgroundColor: '#ffd75f', color: '#87d7ff' })
+  await ui.unmount()
+})
+
+test('a highlight turns inverse off, so the contrast holds', { options: { linkMarks: 'inverse', linkHighlight: '#264f78' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const phrase = await phraseProps(ui)
+  expect(phrase).toMatchObject({ backgroundColor: '#264f78' })
+  expect(phrase).not.toHaveProperty('inverse')
+  await ui.unmount()
+})
+
+test('an opened stretch keeps its tint under a colourful look', { options: { linkMarks: 'bold,dim,inverse', linkTextColor: '#87d7ff', linkHighlight: '#264f78' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  await pressOn(ui, 'on a stale cache')
+  await ui.advance(2000)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  const closer = pieces.find(piece => piece.text === '«')?.props
+  expect(closer?.color).toMatch(/^#/)
+  expect(closer?.color).not.toBe('#87d7ff')
+  expect(closer).not.toHaveProperty('backgroundColor')
+  expect(closer).not.toHaveProperty('dimColor')
+  expect(closer).not.toHaveProperty('inverse')
+  expect(closer).toMatchObject({ bold: true })
+  await ui.unmount()
+})
+
+test('lookOf reads marks in any case, with commas or spaces, in toolbar order', () => {
+  expect(lookOf({ linkMarks: 'Underline , BOLD' }).marks).toEqual(['bold', 'underline'])
+  expect(lookOf({ linkMarks: 'italic bold' }).marks).toEqual(['bold', 'italic'])
+  expect(lookOf({ linkMarks: ' NONE ', linkHighlight: '#264f78' })).toEqual({ marks: [], text: '', highlight: '#264f78' })
+  expect(lookOf({ linkMarks: 'undrline' }).marks).toEqual(DEFAULT_LOOK.marks)
+  expect(lookOf({ linkMarks: 42 })).toEqual(DEFAULT_LOOK)
+  expect(lookOf({ linkMarks: ' ', linkTextColor: '  ', linkHighlight: '' })).toEqual(DEFAULT_LOOK)
+})
+
+test('contrastOn picks the stronger of dark and light text, and leaves non-hex colours alone', () => {
+  expect(contrastOn('#ffd75f')).toEqual({ color: '#1c1c1c' })
+  expect(contrastOn('#264f78')).toEqual({ color: '#f2f2f2' })
+  expect(contrastOn('#fff')).toEqual({ color: '#1c1c1c' })
+  expect(contrastOn('#808080')).toEqual({ color: '#1c1c1c' })
+  for (const colour of ['suggestion', '', '#GGGGGG', 'rgb(0,0,0)']) expect(contrastOn(colour)).toEqual({})
+})
+
+test('pressing a mark twice turns it off, and reset returns to the options look', { options: { linkMarks: 'dim' } }, async $ => {
+  await $.command.run({ command: 'stretch-style' })
+  const toolbar = await mountToolbar($)
+  await toolbar.press({ key: 'mark-bold' })
+  await toolbar.press({ key: 'mark-bold' })
+  await toolbar.press({ key: 'mark-italic' })
+  const ui = await mountReply($, FULLSCREEN)
+  expect(await phraseProps(ui)).toMatchObject({ italic: true, dimColor: true })
+  expect(await phraseProps(ui)).not.toHaveProperty('bold')
+  await toolbar.press({ key: 'reset' })
+  const again = await mountReply($, FULLSCREEN, REPLY, 'terminal', 'reply-2')
+  const phrase = await phraseProps(again)
+  expect(phrase).toMatchObject({ dimColor: true })
+  expect(phrase).not.toHaveProperty('italic')
+  await again.unmount()
+  await ui.unmount()
+  await toolbar.unmount()
+})
+
+test('toolbar colours combine, and each "no" button clears its own part', async $ => {
+  await $.command.run({ command: 'stretch-style' })
+  const toolbar = await mountToolbar($)
+  await toolbar.press({ key: 'text-#87d7ff' })
+  await toolbar.press({ key: 'highlight-#264f78' })
+  const ui = await mountReply($, FULLSCREEN)
+  expect(await phraseProps(ui)).toMatchObject({ color: '#87d7ff', backgroundColor: '#264f78', underline: true })
+  await toolbar.press({ key: 'text-none' })
+  const again = await mountReply($, FULLSCREEN, REPLY, 'terminal', 'reply-2')
+  expect(await phraseProps(again)).toMatchObject({ color: '#f2f2f2', backgroundColor: '#264f78' })
+  await again.unmount()
+  await ui.unmount()
+  await toolbar.unmount()
+})
+
+test('/stretch-style a second time hides the toolbar and says how to keep the look', async ($, on) => {
+  on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }) as never)
+  await $.command.run({ command: 'stretch-style' })
+  const toolbar = await mountToolbar($)
+  await toolbar.press({ key: 'highlight-#264f78' })
+  await toolbar.unmount()
+  const hidden = await $.command.run({ command: 'stretch-style' })
+  expect(JSON.stringify(hidden)).toContain('hidden')
+  expect(JSON.stringify(hidden)).toContain('#264f78')
+  const after = await mountToolbar($)
+  expect(await after.findAll({ type: 'Button' })).toHaveLength(0)
+  await after.unmount()
 })

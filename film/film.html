@@ -2,28 +2,8 @@
 <meta charset="utf-8">
 <title>cc-stretch film</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;700&family=Courier+Prime:wght@400;700&family=Press+Start+2P&display=block">
+<link rel="stylesheet" href="kit.css">
 <style>
-	:root {
-		--cream: #f4f1ea; --ink: #1f1e1b; --muted: #77736a; --orange: #d97757;
-		--paper: #efe6d2; --sepia: #4a3b28; --term: #191816; --term-fg: #e8e5de; --link: #8cc1f0;
-		--serif: 'Newsreader', Georgia, serif; --sans: 'Inter', -apple-system, sans-serif;
-		--mono: 'JetBrains Mono', ui-monospace, monospace; --type: 'Courier Prime', Courier, monospace;
-	}
-	html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: var(--cream); }
-	#stage { position: relative; width: 1920px; height: 1080px; overflow: hidden; background: var(--cream); color: var(--ink); }
-	.layer { position: absolute; inset: 0; opacity: 0; }
-
-	/* Cream cards: one serif statement, an optional small line. */
-	#card { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
-	#card .kicker { font: 500 22px/1 var(--sans); letter-spacing: .24em; text-transform: uppercase; color: var(--muted); margin-bottom: 34px; }
-	#card .big { font: 400 92px/1.08 var(--serif); letter-spacing: -.015em; max-width: 1500px; }
-	#card .small { margin-top: 30px; font: 400 32px/1.4 var(--sans); color: var(--muted); }
-	#card .mono { margin-top: 44px; font: 400 30px/1 var(--mono); color: var(--ink); background: #e9e4d8; padding: 18px 26px; border-radius: 10px; }
-	#card .fine { margin-top: 40px; font: 400 22px/1.5 var(--sans); color: var(--muted); max-width: 1200px; }
-	#card.chip .big, #card.chip .small, #card.chip .fine { font-family: 'Press Start 2P', monospace; }
-	#card.chip .big { font-size: 44px; line-height: 1.5; }
-	#card.chip .small { font-size: 22px; line-height: 1.8; color: var(--ink); }
-	#card.chip .fine { font-size: 15px; line-height: 2; max-width: 1600px; }
 	/* The benchmark card: a reply folds into its skim beside the claim. */
 	#card .fold { display: flex; align-items: center; gap: 130px; }
 	#card .reply { position: relative; width: 520px; height: 642px; padding: 40px 44px; background: var(--term); border-radius: 18px; box-shadow: 0 30px 80px rgba(30,20,10,.22); }
@@ -31,12 +11,6 @@
 	#card .reply i b { position: absolute; top: 0; bottom: 0; border-radius: 6px; background: var(--link); }
 	#card .claim { text-align: left; max-width: 760px; }
 	#card .claim .small { max-width: 640px; }
-	/* The closing card: what to type, in the cartridge font. */
-	#card.chip { padding-top: 120px; box-sizing: border-box; }
-	#card.chip ol { margin: 44px 0 0; padding: 0; list-style: none; text-align: left; font: 400 20px/2.5 'Press Start 2P', monospace; }
-	#card.chip ol span { color: var(--orange); margin-right: 24px; }
-	#card.chip .repo { margin-top: 36px; font: 400 22px/1 'Press Start 2P', monospace; }
-
 	/* 1967: typewriter on paper. */
 	#paper { background: var(--paper); color: var(--sepia); }
 	#paper::after { content: ''; position: absolute; inset: 0; background: radial-gradient(ellipse at center, transparent 55%, rgba(80,55,20,.28)); }
@@ -65,28 +39,6 @@
 	#paper .portrait { position: absolute; left: 160px; top: 140px; width: 150px; height: 150px; border-radius: 50%; object-fit: cover; filter: grayscale(1) sepia(.4); box-shadow: 0 6px 20px rgba(60,40,10,.25); }
 	#paper .portrait-credit { position: absolute; left: 330px; top: 196px; font: 400 18px/1.4 var(--type); opacity: .75; }
 
-	/* The terminal: a recorded Claude Code screen, drawn cell by cell. */
-	#term-wrap { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
-	#term { position: relative; background: var(--term); border-radius: 18px; box-shadow: 0 30px 80px rgba(30,20,10,.28), 0 0 0 1px rgba(0,0,0,.4); overflow: hidden; }
-	#term .bar { height: 46px; display: flex; align-items: center; gap: 10px; padding-left: 20px; background: #24221f; }
-	#term .bar i { width: 14px; height: 14px; border-radius: 50%; background: #4a4640; display: block; }
-	#term .bar span { margin-left: 18px; font: 500 17px/1 var(--sans); color: #8d877d; }
-	#term { width: 1476px; }
-	#rows { position: relative; width: 1440px; height: 990px; margin: 14px 18px 18px; font: 400 24px/1 var(--mono); color: var(--term-fg); }
-	#rows .row { position: absolute; left: 0; height: 33px; width: 100%; white-space: pre; }
-	#rows .row span { position: absolute; top: 4px; }
-	#caption { position: absolute; left: 0; right: 0; top: 0; z-index: 5; padding: 52px 0 46px; text-align: center; font: 500 46px/1.2 var(--sans); letter-spacing: -.01em; color: var(--ink);
-		background: linear-gradient(var(--cream) 78%, rgba(244, 241, 234, 0)); }
-	#caption small { display: block; margin-top: 10px; font: 400 26px/1.3 var(--sans); color: var(--muted); }
-
-	#pointer { position: absolute; left: 0; top: 0; width: 34px; height: 34px; opacity: 0; z-index: 8; }
-	#ring { position: absolute; width: 70px; height: 70px; margin: -35px 0 0 -35px; border: 4px solid var(--orange); border-radius: 50%; opacity: 0; z-index: 7; }
-	#clawd { position: absolute; left: 0; top: 0; image-rendering: pixelated; z-index: 9; }
-	#bubble { position: absolute; z-index: 10; font: 400 18px/1.5 'Press Start 2P', monospace; background: #fff; border: 4px solid var(--ink); padding: 14px 18px; opacity: 0; white-space: nowrap; }
-	#fade { position: absolute; inset: 0; background: var(--cream); opacity: 0; z-index: 20; pointer-events: none; }
-	#flash { position: absolute; inset: 0; background: #fff; opacity: 0; z-index: 21; }
-	#grain { position: absolute; inset: -50%; z-index: 30; opacity: .05; pointer-events: none;
-		background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>"); }
 </style>
 <div id="stage">
 	<div id="card" class="layer"></div>
@@ -105,16 +57,11 @@
 	<div id="flash"></div>
 	<div id="grain"></div>
 </div>
+<script src="kit.js"></script>
 <script>
 // Everything on screen is a function of the film's time: setState({ t }) draws that instant.
 // compose.mjs injects window.TAKE ({ frames: [{ t, rows }], marks }) and the bundled growth
 // code (window.Grow) before the first call.
-const W = 1920, H = 1080, COLS = 100, ROWS = 30, CELL_W = 14.4, CELL_H = 33;
-const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
-const ease = (k) => (k < .5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
-const lerp = (a, b, k) => a + (b - a) * k;
-const span = (t, a, b) => clamp((t - a) / (b - a));
-const $ = (id) => document.getElementById(id);
 
 // The words on screen. The 1967 lines are Ted Nelson's own example of stretchtext.
 const COPY = {
@@ -193,7 +140,6 @@ function buildTimeline() {
 	const answer2 = rowOf(m.replied2.t + 0.5, /Which parts did I skip/);
 	// A click reaches the screen 0.6 to 2 s after it lands in a recorded take; the film cuts that
 	// wait, so each growth starts just after its click.
-	const changed = (takeT) => (window.TAKE.frames.find((f) => f.t > takeT)?.t ?? takeT) - 0.15;
 	add(m.asked.t - m.ready.t + 0.7, m.ready.t - 0.2, m.asked.t + 0.5, 'Ask Claude anything.', '', { focus: composer1 - 10, typing: true });
 	add(1.4, m.asked.t + 0.5, m.replied.t - 1.0, 'Ask Claude anything.', '', { fast: true, focus: asked + 4 });
 	add(2.6, m.replied.t - 1.0, m.open.t, 'Short by default.', '', { focus: m.open.row + 4 });
@@ -216,130 +162,6 @@ function filmTimeOf(takeT) {
 	for (const s of TL.segs) if (takeT >= s.from && takeT <= s.to && !s.fast) return lerp(s.a, s.b, (takeT - s.from) / (s.to - s.from));
 	return null;
 }
-function frameAt(takeT) {
-	const f = window.TAKE.frames;
-	let lo = 0, hi = f.length - 1;
-	while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (f[mid].t <= takeT) lo = mid; else hi = mid - 1; }
-	return f[lo];
-}
-
-/**
- * A recorded growth shows each distinct screen it captured for the same share of the first
- * GROWTH seconds, whatever the gaps between captures were, then plays the rest of the take.
- */
-const GROWTH = 1.1;
-function evenFrame(seg, local) {
-	seg.steps ??= window.TAKE.frames.filter((f) => f.t >= seg.from && f.t <= seg.from + 1.8);
-	if (seg.steps.length === 0 || local >= GROWTH) return frameAt(Math.max(seg.from + 1.8, lerp(seg.from, seg.to, local / (seg.b - seg.a))));
-	return seg.steps[Math.min(seg.steps.length - 1, Math.floor((local / GROWTH) * seg.steps.length))];
-}
-
-// --- drawing helpers -------------------------------------------------------------------------
-// The block elements as rectangles of a cell: [x, y, width, height] in fractions of the cell.
-const UL = [0, 0, .5, .5], UR = [.5, 0, .5, .5], LL = [0, .5, .5, .5], LR = [.5, .5, .5, .5];
-const QUADS = {
-	'█': [[0, 0, 1, 1]], '▀': [[0, 0, 1, .5]], '▄': [[0, .5, 1, .5]], '▌': [[0, 0, .5, 1]], '▐': [[.5, 0, .5, 1]],
-	'▘': [UL], '▝': [UR], '▖': [LL], '▗': [LR], '▚': [UL, LR], '▞': [UR, LL],
-	'▛': [UL, UR, LL], '▜': [UL, UR, LR], '▙': [UL, LL, LR], '▟': [UR, LL, LR],
-};
-let shownFrame = null;
-function drawRows(frame) {
-	if (frame === shownFrame) return;
-	shownFrame = frame;
-	const host = $('rows');
-	host.innerHTML = '';
-	frame.rows.forEach((runs, r) => {
-		const row = document.createElement('div');
-		row.className = 'row';
-		row.style.top = `${r * CELL_H}px`;
-		for (const run of runs) {
-			// Block characters are cell shapes, as a terminal draws them, not glyphs a font leaves gaps around.
-			if ([...run.text].some((ch) => QUADS[ch] !== undefined)) {
-				let col = run.col;
-				for (const ch of run.text) {
-					const quads = QUADS[ch];
-					if (quads !== undefined) {
-						for (const [qx, qy, qw, qh] of quads) {
-							const b = document.createElement('i');
-							b.style.cssText = `position:absolute;left:${(col + qx) * CELL_W}px;top:${qy * CELL_H}px;width:${qw * CELL_W + 1.2}px;height:${qh * CELL_H + 1.2}px;background:${run.fg ?? 'var(--term-fg)'}`;
-							row.appendChild(b);
-						}
-					} else if (ch !== ' ') {
-						const g = document.createElement('span');
-						g.textContent = ch;
-						g.style.left = `${col * CELL_W}px`;
-						g.style.color = run.fg ?? 'var(--term-fg)';
-						row.appendChild(g);
-					}
-					col += 1;
-				}
-				continue;
-			}
-			const s = document.createElement('span');
-			s.textContent = run.text;
-			s.style.left = `${run.col * CELL_W}px`;
-			let fg = run.fg ?? 'var(--term-fg)', bg = run.bg;
-			if (run.inverse) [fg, bg] = [bg ?? 'var(--term)', run.fg ?? 'var(--term-fg)'];
-			s.style.color = fg;
-			if (bg) s.style.background = bg;
-			if (run.bold) s.style.fontWeight = '700';
-			if (run.dim) s.style.opacity = '.55';
-			if (run.italic) s.style.fontStyle = 'italic';
-			if (run.underline) s.style.textDecoration = 'underline';
-			row.appendChild(s);
-		}
-		host.appendChild(row);
-	});
-}
-const TERM_W = COLS * CELL_W + 36, TERM_H = ROWS * CELL_H + 46 + 32;
-function placeTerm(zoom, focusRow, lift = 0) {
-	const fit = Math.min((W - 160) / TERM_W, (H - 230) / TERM_H);
-	const s = fit * zoom;
-	const cx = W / 2, cy = 190 + (H - 190) / 2 + lift;
-	const fy = 46 + 14 + focusRow * CELL_H;
-	const x = cx - (TERM_W / 2) * s;
-	const y = zoom > 1 ? cy - fy * s : cy - (TERM_H / 2) * s;
-	$('term-wrap').style.transform = `translate(${x}px, ${y}px) scale(${s})`;
-	return { x, y, s };
-}
-function cellToScreen(cam, row, col) {
-	return { x: cam.x + (18 + (col + 0.5) * CELL_W) * cam.s, y: cam.y + (46 + 14 + (row + 0.6) * CELL_H) * cam.s };
-}
-
-const SPRITE = {
-	idle: ['..XXXXXXXXXX..', '..XXKXXXXKXX..', '..XXKXXXXKXX..', 'XXXXXXXXXXXXXX', '..XXXXXXXXXX..', '..XXXXXXXXXX..', '..X.X....X.X..', '..X.X....X.X..'],
-	walk: ['..XXXXXXXXXX..', '..XXKXXXXKXX..', '..XXKXXXXKXX..', 'XXXXXXXXXXXXXX', '..XXXXXXXXXX..', '..XXXXXXXXXX..', '...X.X..X.X...', '...X.X..X.X...'],
-	blink: ['..XXXXXXXXXX..', '..XXXXXXXXXX..', '..XXKXXXXKXX..', 'XXXXXXXXXXXXXX', '..XXXXXXXXXX..', '..XXXXXXXXXX..', '..X.X....X.X..', '..X.X....X.X..'],
-	wave: ['..XXXXXXXXXX.X', '..XXKXXXXKXX.X', '..XXKXXXXKXXXX', 'XXXXXXXXXXXX..', '..XXXXXXXXXX..', '..XXXXXXXXXX..', '..X.X....X.X..', '..X.X....X.X..'],
-	sweat: ['..XXXXXXXXXX.B', '..XXKXXXXKXX..', '..XXKXXXXKXX..', 'XXXXXXXXXXXXXX', '..XXXXXXXXXX..', '..XXXXXXXXXX..', '..X.X....X.X..', '..X.X....X.X..'],
-};
-function drawClawd(c) {
-	const el = $('clawd');
-	if (!c) { el.style.opacity = 0; return; }
-	const ctx = el.getContext('2d');
-	ctx.clearRect(0, 0, 14, 8);
-	SPRITE[c.pose].forEach((line, y) => [...line].forEach((p, x) => {
-		if (p === '.') return;
-		ctx.fillStyle = p === 'K' ? '#1f1e1b' : p === 'B' ? '#6cb4ee' : '#d97757';
-		ctx.fillRect(x, y, 1, 1);
-	}));
-	el.style.opacity = c.alpha ?? 1;
-	el.style.width = `${14 * c.px}px`;
-	el.style.height = `${8 * c.px}px`;
-	el.style.transform = `translate(${c.x}px, ${c.y}px) scaleX(${c.flip ? -1 : 1}) rotate(${c.rot ?? 0}deg)`;
-}
-function bubble(text, x, y, alpha) {
-	const b = $('bubble');
-	b.textContent = text;
-	b.style.opacity = alpha;
-	b.style.transform = `translate(${x}px, ${y}px)`;
-}
-function show(id, alpha) { $(id).style.opacity = alpha; }
-function card(html, cls = '') {
-	const c = $('card');
-	if (c.dataset.html !== html) { c.dataset.html = html; c.innerHTML = html; }
-	c.className = `layer ${cls}`;
-}
 
 // --- scenes ---------------------------------------------------------------------------------
 function hook(t) {
@@ -357,13 +179,6 @@ function hook(t) {
 	const bob = Math.round(Math.sin(t * 9) * 2) * 6;
 	drawClawd({ pose: t > 3.4 ? 'sweat' : Math.floor(t * 3) % 7 === 0 ? 'blink' : 'idle', x: 1580, y: 900 + bob, px: 14 });
 	show('fade', span(t, 4.4, 5));
-}
-const loads = [];
-function setImage(target, src) {
-	const img = typeof target === 'string' ? $(target) : target;
-	if (img.getAttribute('src') === src) return;
-	img.setAttribute('src', src);
-	loads.push(img.decode().catch(() => {}));
 }
 function turn(t) {
 	// 5-8 s: the idea is older than the web. Archive pictures when the assets are present.
@@ -522,22 +337,7 @@ function terminal(t) {
 	$('caption').style.opacity = 1;
 	// The pointer travels to each click the take made, and rings where it lands.
 	const m = window.TAKE.marks;
-	const clicks = ['open', 'nest', 'close'].map((name) => ({ at: filmTimeOf(m[name].t), ...m[name] })).filter((c) => c.at !== null);
-	const next = clicks.find((c) => t <= c.at + 0.35);
-	const prev = [...clicks].reverse().find((c) => t > c.at + 0.35);
-	if (next && t > next.at - 1.3) {
-		const to = cellToScreen(cam, next.row, next.col);
-		const from = prev ? cellToScreen(cam, prev.row, prev.col) : { x: W - 260, y: H - 120 };
-		const k2 = ease(span(t, next.at - 1.1, next.at - 0.1));
-		$('pointer').style.opacity = 1;
-		$('pointer').style.transform = `translate(${lerp(from.x, to.x, k2) - 6}px, ${lerp(from.y, to.y, k2) - 4}px)`;
-		const r = span(t, next.at, next.at + 0.35);
-		$('ring').style.opacity = r > 0 && r < 1 ? 1 - r : 0;
-		$('ring').style.transform = `translate(${to.x}px, ${to.y}px) scale(${0.4 + r})`;
-	} else {
-		$('pointer').style.opacity = 0;
-		$('ring').style.opacity = 0;
-	}
+	pointTo(['open', 'nest', 'close'].map((name) => ({ at: filmTimeOf(m[name].t), ...cellToScreen(cam, m[name].row, m[name].col) })).filter((c) => c.at !== null), t);
 	drawClawd(null);
 	show('fade', 1 - span(t, T_TERM, T_TERM + 0.4) + span(t, TL.end - 0.4, TL.end));
 }
@@ -614,8 +414,6 @@ window.setState = async ({ t }) => {
 	else if (t < TL.end + STAT) stat(t - TL.end);
 	else if (t < TL.end + STAT + 5) title(t - TL.end - STAT);
 	else parody(t - TL.end - STAT - 5);
-	await Promise.all(loads);
-	await document.fonts.ready;
-	await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+	await endFrame();
 };
 </script>

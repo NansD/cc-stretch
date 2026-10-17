@@ -1,7 +1,8 @@
 // Reads a terminal screen as `wezterm cli get-text --escapes` writes it (as of WezTerm
 // 20260905-195314-b99b1ca2): text with SGR colour codes, truecolor written with colons
 // (`38:2::r:g:b`), and OSC 8 hyperlinks. Returns rows of styled runs, each with the column it
-// starts at, so a renderer can place every run exactly and a driver can find a link to click.
+// starts at, so a renderer can place every run exactly and a driver can find what to click or type:
+// a link, an underlined phrase, a keyboard letter.
 
 /** @typedef {{ fg: string | null, bg: string | null, bold: boolean, dim: boolean, italic: boolean, underline: boolean, inverse: boolean }} Style */
 /** @typedef {Style & { text: string, col: number, link: string | null }} Run */
@@ -70,6 +71,9 @@ export function cellWidth(ch) {
 		(c >= 0xffe0 && c <= 0xffe6) || (c >= 0x1f300 && c <= 0x1f64f) || (c >= 0x1f900 && c <= 0x1f9ff) ? 2 : 1;
 }
 
+/** Cells a run of text takes. */
+const textWidth = (text) => [...text].reduce((n, ch) => n + cellWidth(ch), 0);
+
 /** @param {string} text @returns {Run[][]} */
 export function parseScreen(text) {
 	const rows = [];
@@ -119,9 +123,47 @@ export function linksOn(rows, pattern) {
 		for (const run of runs) {
 			if (run.link === null || !pattern.test(run.link)) continue;
 			const last = found.at(-1);
-			const width = [...run.text].reduce((n, ch) => n + cellWidth(ch), 0);
+			const width = textWidth(run.text);
 			if (last && last.link === run.link && last.row === row && last.end === run.col) last.end += width;
 			else found.push({ link: run.link, row, col: run.col, end: run.col + width, text: run.text });
+		}
+	});
+	return found;
+}
+
+/**
+ * Every underlined phrase on screen, which is what a press acts on in the reply region the plugin
+ * draws: a closed stretch's short form, or an open one's «. Adjacent underlined runs on a row join,
+ * and so does a phrase that ends its row with one that starts the next: a short form wrapped in two.
+ * A phrase keeps the row and columns of its first part, where a click lands.
+ */
+export function pressablesOn(rows) {
+	const found = [];
+	// The row whose text ended in an underlined phrase, which an underlined first run on the next row continues.
+	let endedUnderlined = -1;
+	rows.forEach((runs, row) => {
+		const textRuns = runs.filter((run) => run.text.trim() !== '');
+		textRuns.forEach((run, i) => {
+			if (run.underline) {
+				const last = found.at(-1);
+				if (i === 0 && endedUnderlined === row - 1 && last) last.text += ` ${run.text.trimStart()}`;
+				else if (last && last.row === row && last.end === run.col) { last.end += textWidth(run.text); last.text += run.text; }
+				else found.push({ row, col: run.col, end: run.col + textWidth(run.text), text: run.text });
+			}
+			if (i === textRuns.length - 1) endedUnderlined = run.underline ? row : -1;
+		});
+	});
+	return found;
+}
+
+/** The keyboard letters on screen: a bold lowercase letter on a coloured background, with its cell. */
+export function lettersOn(rows) {
+	const found = [];
+	rows.forEach((runs, row) => {
+		for (const run of runs) {
+			const letter = run.text.trimEnd();
+			const bg = run.inverse ? run.fg : run.bg;
+			if (run.bold && bg !== null && /^[a-z]$/.test(letter)) found.push({ letter, row, col: run.col });
 		}
 	});
 	return found;

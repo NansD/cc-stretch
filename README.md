@@ -108,9 +108,10 @@ npm test            # claude plugin validate . && claude plugin test .
 npm run typecheck   # the benchmark scripts
 ```
 
-The film in `film/` is made from a real recorded session: `film/take.mjs` drives Claude Code in a
-WezTerm pane and records its screen, and `film/compose.mjs` renders the film. Archive pictures in the
-film: photographs of the Hypertext Editing System at Brown University, October 1969, by Gregory Lloyd
+The launch film in `film/` is made from a real recorded session: `film/take.mjs` drives Claude Code
+in a WezTerm pane and records its screen, and `film/compose.mjs` renders the film. Each release from
+0.4.0 on has a film of its own: `film/releases/<version>/` holds its take script and cut, and
+`node film/compose.mjs --release=<version>` renders it. Archive pictures in the launch film: photographs of the Hypertext Editing System at Brown University, October 1969, by Gregory Lloyd
 (CC BY-SA 4.0, via Wikimedia Commons), and a photograph of Ted Nelson, 2010, by Beatrice Murch
 (CC BY 2.0, via Wikimedia Commons). They are not stored in this repo; `film/CREDITS.md` lists each
 source, its license and where to fetch it into `film/out/assets/`.

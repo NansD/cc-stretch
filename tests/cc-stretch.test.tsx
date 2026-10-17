@@ -186,10 +186,81 @@ describe('streaming', () => {
     on('session.surfaces', () => ({ value: ['terminal'] }))
     const flush = (index: number, delta: string, final = false) =>
       $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
-    await flush(0, 'Intro.\n')
-    const [opening, last] = await Promise.all([flush(1, 'A monad is {{a wrapper|a wrapper, like\n'), flush(2, 'Maybe or List,}} with two operations.', true)])
-    expect(opening.displayContent).toBe('A monad is a wrapper\n')
-    expect(last.displayContent).toBe(' with two operations.')
+    const shown = await Promise.all([flush(0, 'Intro.\n'), flush(1, 'A monad is {{a wrapper|a wrapper, like\n'), flush(2, 'Maybe or List,}} with two operations.', true)])
+    expect(shown.map(flush => flush.displayContent)).toEqual(['Intro.\n', 'A monad is a wrapper\n', ' with two operations.'])
+  })
+
+  test('a message that begins leaves a finished one the state its last flush, still on its way, needs', async ($, on) => {
+    let release = () => {}
+    const held = new Promise<void>(resolve => (release = resolve))
+    on('classic.MessageDisplay', async (_, e) => {
+      if (e.message_id === 'a' && e.final) await held
+      return {}
+    })
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const flush = (message: string, index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: message, index, final, delta })
+    await flush('a', 0, 'A monad is {{a wrapper|a wrapper, like\n')
+    const last = flush('a', 1, 'Maybe or List,}} with two operations.', true)
+    await flush('b', 0, 'Next.\n')
+    release()
+    expect((await last).displayContent).toBe(' with two operations.')
+  })
+
+  // As of Claude Code 2.1.302 the test kit cannot reload a plugin, so the reload is stood in for by the
+  // state the last flush before it left, answered to the plugin's own read.
+  test('a message first seen midway continues from the state its last flush left, and is found once finished', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
+    const raw = 'A monad is {{a wrapper|a wrapper, like\nMaybe or List,}} with two operations.\n'
+    let hasLanded = false
+    let searches = 0
+    on('session.messages', () => {
+      searches++
+      return { value: hasLanded ? [{ role: 'assistant' as const, text: raw, toolUses: [] }] : [] }
+    })
+    let isLeft = true
+    on('state.get', (_, e, next) => (isLeft && e.plugin === 'cc-stretch' && e.key === 'streams' ? { value: { value: { m: { open: [{ isLong: true }] } }, version: 0 } } : next(e)))
+    on('state.set', { plugin: 'cc-stretch', key: 'streams' }, (_, e, next) => {
+      isLeft = false
+      return next(e)
+    })
+    const earlier = await mountReply($, FULLSCREEN, 'A plain reply drawn before.', 'terminal', 'reply-0')
+    await earlier.unmount()
+    const middle = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 1, final: false, delta: 'Maybe or List,}} with two operations.\n' })
+    expect(middle.displayContent).toBe(' with two operations.\n')
+    hasLanded = true
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 2, final: true, delta: '' })
+    const ui = await mountReply($, FULLSCREEN, 'A monad is a wrapper\n with two operations.\n')
+    expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === 'a wrapper')?.props).toMatchObject({ underline: true })
+    await ui.unmount()
+    expect(searches).toBe(2)
+  })
+
+  test('a reply whose final flush failed is found among the session\'s messages when drawn', async ($, on) => {
+    on('classic.MessageDisplay', (_, e) => {
+      if (e.final) throw new Error('a hook beneath failed')
+      return {}
+    })
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
+    const raw = 'A monad is {{a wrapper|a wrapper, like Maybe or List}}.'
+    let hasLanded = false
+    on('session.messages', () => ({ value: hasLanded ? [{ role: 'assistant' as const, text: raw, toolUses: [] }] : [] }))
+    const earlier = await mountReply($, FULLSCREEN, 'A plain reply drawn before.', 'terminal', 'reply-0')
+    await earlier.unmount()
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: true, delta: raw }).catch(() => undefined)
+    hasLanded = true
+    const ui = await mountReply($, FULLSCREEN, 'A monad is a wrapper.')
+    expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === 'a wrapper')?.props).toMatchObject({ underline: true })
+    await ui.unmount()
   })
 
   // Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the display text the filter left.

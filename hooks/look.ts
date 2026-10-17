@@ -47,7 +47,8 @@ export function marksSetting(marks: readonly Mark[]): string {
 /** A look held in state, checked: what the toolbar stored, or null when there is none. */
 export function storedLook(value: unknown): Look | null {
   if (typeof value !== 'object' || value === null || !('marks' in value) || !Array.isArray(value.marks)) return null
-  return { marks: marksOf(value.marks.join(',')), highlight: highlightOf('highlight' in value ? value.highlight : undefined) }
+  if (!('highlight' in value) || typeof value.highlight !== 'string') return null
+  return { marks: marksOf(value.marks.join(',')), highlight: highlightOf(value.highlight) }
 }
 
 /** Whether two looks draw a phrase the same. */

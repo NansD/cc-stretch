@@ -22,7 +22,7 @@ const toolbarShown = atom({ plugin: 'cc-stretch', key: 'toolbar' } as const, fal
 /** Plugin state, not module state: as of Claude Code 2.1.302 each setting written reloads the plugin, and a save outlives the reload. */
 const toolbarHolder = atom({ plugin: 'cc-stretch', key: 'busy' } as const, null)
 /** Plugin state for the same reason: a save can land while a reply streams, and its next flush continues from here. */
-const streaming = atom({ plugin: 'cc-stretch', key: 'streams' } as const, {})
+const streamCheckpoints = atom({ plugin: 'cc-stretch', key: 'streams' } as const, {})
 
 // The highlights the toolbar offers: deep colours, whose text turns light. A light highlight would draw
 // dark text on a light ground, as a selection does. No text colour is offered: links, code and the
@@ -88,10 +88,11 @@ const keyOf = (text: string) => text.replace(/\s+/g, '')
 
 // Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the reply as the streaming filter
 // left it, with its long forms gone. Each filtered reply is kept by what it was shown as, so the
-// site can draw it from its markup again; null for one that held no stretch. Replies from before the
-// plugin last loaded are read from the session's messages, once, when a draw first finds one not kept.
+// site can draw it from its markup again; null for one that held no stretch. Replies it could not
+// keep, from before the plugin last loaded or whose final flush it did not see whole, are read from the
+// session's messages when a draw first finds one missing.
 const unfiltered = new Map<string, string | null>()
-/** The read of the session's replies into `unfiltered`: undefined until a draw needs it, and after a read that failed. */
+/** The read of the session's replies into `unfiltered`: undefined until a draw needs it, after a read that failed, and after a reply not kept has finished. */
 let sessionKept: Promise<void> | undefined
 
 function remember(raw: string, shown: string): void {
@@ -125,7 +126,7 @@ async function keepSession($: EngineInterface): Promise<void> {
   for (const message of messages) if (message.role === 'assistant') remember(message.text, hideLongForms(message.text, newStreamState()))
 }
 
-/** One filter state per streaming message, until its final flush; null for a message left as written. */
+/** One filter state per streaming message, until its final flush or another message begins; null for a message left as written. */
 const streams = new Map<string, Stream | null>()
 /** Each streaming message's latest flush, which its next one waits for. */
 const flushes = new Map<string, Promise<void>>()
@@ -137,10 +138,10 @@ async function display($: EngineInterface, e: Flush, answer: Shown): Promise<Sho
   let stream = streams.get(e.message_id)
   if (stream === undefined) {
     // As of Claude Code 2.1.302 a message that begins abandons any not finished, which then gets no
-    // final flush.
-    if (e.index === 0) streams.clear()
+    // final flush; a finished one may still have flushes on their way.
+    if (e.index === 0) for (const id of streams.keys()) if (!flushes.has(id)) streams.delete(id)
     // Seen midway: the plugin loaded again while it streamed, and its last flush left its state.
-    const left = e.index === 0 ? undefined : (await read($, streaming))[e.message_id]
+    const left = e.index === 0 ? undefined : (await read($, streamCheckpoints))[e.message_id]
     // The desktop app draws a finished reply from this display text, so hiding the long forms here
     // would strip the markup its links are made from. Decided on a message's first flush, so a
     // surface that attaches or leaves midway cannot half-filter it.
@@ -162,7 +163,7 @@ async function display($: EngineInterface, e: Flush, answer: Shown): Promise<Sho
     if (stream?.isWhole) remember(stream.raw, stream.shown)
     else if (stream !== null) sessionKept = undefined
   }
-  await update($, streaming, () => Object.fromEntries([...streams].map(([id, kept]) => [id, kept && kept.state])))
+  await update($, streamCheckpoints, () => Object.fromEntries([...streams].map(([id, kept]) => [id, kept && kept.state])))
   return stream === null ? answer : { ...answer, displayContent }
 }
 
@@ -304,8 +305,15 @@ export const register: Register = (on, options) => {
   on('classic.MessageDisplay', ($, e, next) => {
     const before = flushes.get(e.message_id)
     const flush = (async () => {
-      await before
-      return display($, e, await next(e))
+      try {
+        const answer = await next(e)
+        await before
+        return await display($, e, answer)
+      } catch (error) {
+        // A reply whose final flush failed is not kept, so the session is read again when it is drawn.
+        if (e.final) sessionKept = undefined
+        throw error
+      }
     })()
     const settled = flush.then(
       () => undefined,

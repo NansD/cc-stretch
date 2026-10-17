@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.4.0 — 2026-10-16
+
+- Stretches open from the keyboard. In the terminal's fullscreen layout, alt+↓ or ctrl+↓ puts a
+  letter over each closed stretch in the latest three replies on screen (up to 26), and typing that
+  letter opens it in place; alt+↑ or ctrl+↑ puts letters over each «, to close. Typing anything else
+  puts the letters away and is typed as usual; so do recalling a prompt, sending one, and the same
+  chord again. As of Claude Code 2.1.301 a plugin has no chords of its own, so these are the chords
+  that scroll the diff panel's file list.
+- Lists stay lists. Claude writes each list item as a short stretch of its own, so every item stays
+  in view and opens on its own, instead of the whole list hiding inside one stretch. The guide gains
+  one line: "Stretch list items, not whole lists." In the guide bench, on the list tasks the line
+  was written for, answers kept every item in view 4 times out of 6 with it and 0 out of 5 without
+  it; on held-out list tasks both kept them 6 times out of 6.
+- A paragraph whose last row ends in a stretch no longer passes its underline, or a letter's
+  background, to the start of the next paragraph's first row (seen in Claude Code 2.1.302 in
+  WezTerm).
+- A short film of what's new is attached to this release. `film/releases/0.4.0` records and cuts
+  it, and `node film/compose.mjs --release=<version>` renders a release's film from its take.
+
 ## 0.3.7 — 2026-10-16
 
 - Drawing a reply no longer hangs when a stretch sits inside a short form written over several

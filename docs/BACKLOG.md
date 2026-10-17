@@ -5,7 +5,7 @@ Checkbox marks a lane consumed (plan written, or direct commit landed).
 
 ## Lanes
 
-- [ ] **plugin-folder** — an install copies the plugin, not the repo's dev tools · verdict: direct · waits on: the uncommitted guide-bench work in `bench/` landing
+- [ ] **plugin-folder** — an install copies the plugin, not the repo's dev tools · verdict: direct · waits on: the uncommitted changes to `bench/replay.ts` and `bench/labels.ts` landing or being dropped
 - [ ] **renderers-use-drawn-as** — every renderer draws a stretch the way `drawnAs` says · verdict: direct · waits on: PR #12 merged or closed
 - [ ] **keyboard-item-words** — the list rule finds the reply item by the words a reply uses for it · verdict: direct
 - [ ] **judge-controls** — a grading run whose judge misgrades a known answer is refused · verdict: direct

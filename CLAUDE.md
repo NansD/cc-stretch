@@ -38,3 +38,4 @@ and in time a guide chosen for each model Claude Code runs.
   `.claude-plugin/types/` when it loads the plugin from this folder (`claude --plugin-dir .`).
 - A comment or doc that says how Claude Code behaves names the version it was checked against: the
   plugin API changes between releases.
+- E2E map: `docs/e2e-map.md`, how to prove a change in a live Claude Code session.

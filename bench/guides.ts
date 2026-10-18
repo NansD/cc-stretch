@@ -65,6 +65,8 @@ const RECIPES: Readonly<Record<string, readonly (readonly [anchor: string, line:
   example: [[AFTER_SHORTEST, LIST], [LIST, '- A short form says what is true: "{{The cache survives restarts.|The local cache survives process restarts because SQLite persists it on disk.}}". "Storage details." only names the subject and is not a useful short form.']],
   /** Put headings outside stretches and stretch the statements they introduce. */
   'headings-outside': [[AFTER_SHORTEST, LIST], [LIST, '- Keep topic headings as ordinary text. Make the statement beneath each heading a stretch.']],
+  /** Draft the reply in thinking first, and choose each short form's words there. */
+  'draft-in-thinking': [[AFTER_LONG, '- Draft the reply in your thinking first, as plain sentences with all their detail, and choose there the words each detail grows around. Then write the reply from the draft, opening each stretch before those words: a stretch opens before its short form, so a sentence already written can no longer become one.']],
 }
 
 const additions = Object.fromEntries(

@@ -30,6 +30,11 @@ screen with `wezterm cli get-text --escapes` and parse it with `film/screen.mjs`
 colours, underline, inverse and OSC 8 links. Wait for what the screen should show, never a fixed
 delay: under load a redraw after a press took over a second.
 
+As of WezTerm 20260905-195314-b99b1ca2, `get-text --escapes` can give a paragraph's first row the
+style the paragraph above ends in, such as an open stretch's underlined `«`, though the pane does not
+draw it (`firstCarriedRow` in `film/screen.mjs` says why). `openPane` reads such a row again. To see
+one row's own style by hand, read it alone with `--start-line` and `--end-line`.
+
 As of Claude Code 2.1.302 a session reads a click's position in cells, counted from 1, until its
 `--debug-file` log says `Mouse reports in pixels`, and in pixels from then on, at a cell's middle
 pixel. In these runs the switch came once a reply holding a stretch was drawn, so a click sent in

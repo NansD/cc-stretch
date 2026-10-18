@@ -127,6 +127,19 @@ export function plainRows(rows) {
 	});
 }
 
+/**
+ * The first row of a screen that follows an empty row and starts with text in a style carried from
+ * above, or -1. As of WezTerm 20260905-195314-b99b1ca2, get-text writes a row of plain spaces as
+ * nothing and leaves out the reset to plain after it (`Line::changes` drops the row's one change of
+ * style, while `lines_to_escapes` goes on as if it had been written), so the style such a row seems to
+ * have may not be drawn: only a read that starts at the row shows its own.
+ */
+export function firstCarriedRow(text) {
+	const lines = text.replace(/\r?\n$/, '').split(/\r?\n/);
+	return parseScreen(text).findIndex((runs, i) => lines[i - 1] === '' && !lines[i].startsWith('\x1b') &&
+		runs[0] !== undefined && Object.entries(plain()).some(([key, value]) => runs[0][key] !== value));
+}
+
 /** Every link on screen whose target matches `pattern`, with the row and the columns it covers. */
 export function linksOn(rows, pattern) {
 	const found = [];

@@ -29,9 +29,11 @@ function readTake(dir) {
 		const f = JSON.parse(line);
 		const rows = parseScreen(f.screen).map((runs) => (PRIVATE.test(runs.map((r) => r.text).join('')) ? [] : runs));
 		// A paragraph's first row can carry the style the paragraph before it ends in, a stretch's
-		// underline or a letter's background, from its margin on (seen in Claude Code 2.1.302 takes,
-		// briefly while a stretch grows). The margin is never styled otherwise, so such a row is drawn as
-		// it was last drawn plain, or failing that with its indent and list marker plain.
+		// underline or a letter's background, from its margin on: as of WezTerm 20260905-195314-b99b1ca2,
+		// get-text left out a reset (see firstCarriedRow in screen.mjs), and the pane never drew it.
+		// readScreen in recorder.mjs reads such rows again, so mostly takes recorded before it have them.
+		// The margin is never styled otherwise, so such a row is drawn as it was last drawn plain, or
+		// failing that with its indent and list marker plain.
 		const texts = plainRows(rows);
 		rows.forEach((runs, i) => {
 			const first = runs[0];

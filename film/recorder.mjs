@@ -9,7 +9,7 @@ import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
-import { lettersOn, linksOn, parseScreen, plainRows, pressablesOn, turnsDone } from './screen.mjs';
+import { firstCarriedRow, lettersOn, linksOn, parseScreen, plainRows, pressablesOn, turnsDone } from './screen.mjs';
 
 const run = promisify(execFile);
 export const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
@@ -47,6 +47,31 @@ export function keepSettings() {
 	};
 }
 
+/**
+ * The screen of a pane `rows` high as `wezterm cli get-text --escapes` writes it, except that each row
+ * firstCarriedRow names is read again from that row on, where a read starts plain, and spliced in. If
+ * that row's text changed between the two reads, it starts over with a new whole read, up to three
+ * whole reads; the last is then given as written. Every read names its last row: as of WezTerm
+ * 20260905-195314-b99b1ca2, a read whose end runs past the screen gives the last rows whatever its
+ * start, two rows early from row 14 of 30 and into the scrollback from row 0.
+ */
+async function readScreen(pane, rows) {
+	const getText = async (from) => (await run('wezterm', ['cli', 'get-text', '--pane-id', pane, '--escapes', '--start-line', String(from), '--end-line', String(rows - 1)], { maxBuffer: 1 << 24 })).stdout;
+	let screen = '';
+	for (let tries = 0; tries < 3; tries++) {
+		screen = await getText(0);
+		let text = screen, isChanged = false;
+		for (let row = firstCarriedRow(text); row !== -1; row = firstCarriedRow(text)) {
+			const rest = await getText(row);
+			isChanged = plainRows(parseScreen(rest))[0] !== plainRows(parseScreen(text))[row];
+			if (isChanged) break;
+			text = [...text.split('\n').slice(0, row), `\x1b[0m${rest}`].join('\n');
+		}
+		if (!isChanged) return text;
+	}
+	return screen;
+}
+
 /** The `claude` a login shell finds. */
 export const claudePath = () => execFileSync('zsh', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
 
@@ -80,10 +105,10 @@ export function openPane({ cols, rows, command, t0, frames = [], debugFile }) {
 	let isRecording = true;
 	const recording = (async () => {
 		while (isRecording) {
-			const { stdout } = await run('wezterm', ['cli', 'get-text', '--pane-id', pane, '--escapes'], { maxBuffer: 1 << 24 });
-			if (stdout !== last) {
-				frames.push({ t: (Date.now() - t0) / 1000, screen: stdout });
-				last = stdout;
+			const screen = await readScreen(pane, size.rows);
+			if (screen !== last) {
+				frames.push({ t: (Date.now() - t0) / 1000, screen });
+				last = screen;
 			}
 		}
 	})();

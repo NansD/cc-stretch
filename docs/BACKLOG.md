@@ -14,7 +14,6 @@ Checkbox marks a lane consumed (plan written, or direct commit landed).
 - [ ] **bench-outside-git** — the bench runs from a source archive · verdict: defer · signal: `Command failed: git rev-parse HEAD` · promote when: someone runs the bench from an archive
 - [ ] **replay-counts-recomputed** — published replay counts follow the current measurement · verdict: defer · signal: none · promote when: a change to what the skim counts
 - [ ] **nested-key-separator** — no two stretches in a reply share a key · verdict: defer · signal: none · promote when: a stretch opens a different one, or opens in its holder's colour
-- [ ] **row-start-style** — a paragraph's first row never shows the previous row's style · verdict: defer · signal: none · promote when: a stray underline is reported or filmed
 - [ ] **old-replies-live** — on Claude Code 2.1.300, a reply from before a style save keeps its stretches · verdict: pending · needs: a live session on Claude Code 2.1.299 or 2.1.300
 - [ ] **theme-read** — stretch colours follow the theme the screen shows · verdict: defer · signal: none · promote when: a reader on a light screen reports dark highlights
 - [ ] **tinted-256** — the four tinted highlights stay four colours on a 256-colour terminal · verdict: defer · signal: none · promote when: a reader reports two tinted stretches in one colour
@@ -119,27 +118,6 @@ switch the input method off first.
 - Fix shape: join keys with a character a short form cannot hold, such as a noncharacter. That
   changes every nested stretch's key, so open lists saved before it read nested stretches as closed
   once. The open order can take a stretch's holder from the parse, as `placesOf` does.
-
-## row-start-style
-
-- Problem: in Claude Code 2.1.302 in WezTerm, the cells that start a paragraph's first row can take
-  the style the previous paragraph's last row ends in (a stretch's underline, a letter's
-  background). 13bf540 ends a styled last row with one plain cell; in recorded takes after it, this
-  showed as two flashes of about 0.2 s, each while an opened item grew.
-- Unknown: which layer keeps the style. The plugin's drawn tree has no style there (checked with the
-  plugin test engine), so it is Claude Code's renderer or WezTerm.
-- Failure sequence: open a list item whose paragraph is followed by another paragraph; while it
-  grows, the next paragraph's first row shows the underline from column 0 for about 0.2 s.
-- It can also stay. In two runs of `film/e2e/tinted.mjs` on 0.5.0 the opened stretch's `«` ended the
-  first paragraph, and once the style toolbar closed, the second paragraph's first row was
-  underlined from column 0 in that stretch's colour for the 15 s left in the session; the check
-  failed both times. A run whose `«` was followed by a full stop passed.
-- Signal: none in the product. In a recorded take: rows whose first run starts at column 0 with
-  spaces and is underlined or has a background.
-- Promote when: a user reports a stray underline, the next release film shows it, or the tinted
-  check fails on it again.
-- Acceptance: recording the same reply in Terminal.app tells Claude Code from WezTerm; with the
-  layer known, no styled row start in a take's growth frames.
 
 ## old-replies-live
 

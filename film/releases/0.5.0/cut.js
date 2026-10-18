@@ -71,13 +71,14 @@
 		);
 	}
 
-	// The end: a click stretches Clawd tall above the install line, and a second lets it go; it blinks
-	// once it has rung back to its shape. The last line thanks the pull request's author.
+	// The end: a click stretches Clawd wide above the install line, sideways as a stretch grows along its
+	// line, and a second lets it go; it blinks once it has rung back to its shape. The last line thanks
+	// the pull request's author.
 	const END_GROUND = 360;
-	const TALL = clickPull(1.5, 0.84, 1.4);
+	const END_PULL = clickPull(1.5, 1.5, 0.88);
 	function endCard(t) {
 		return stage(
-			clawd(CX, END_GROUND, { ...pulled(t, TALL), pose: t > TALL.go + 0.8 ? blink(t) : 'idle' }),
+			clawd(CX, END_GROUND, { ...pulled(t, END_PULL), pose: t > END_PULL.go + 0.8 ? blink(t) : 'idle' }),
 			line('big', 430, COPY.title, 'max-width:none'),
 			line('', 585, `<div class="mono" style="margin:0">${COPY.install}</div>`, 'display:flex;justify-content:center'),
 			line('small', 680, COPY.then, 'margin:0;font-family:var(--mono)'),
@@ -127,7 +128,7 @@
 				pressing(after(m.save), m.close, SAVE, 1.3),
 				shot(after(m.close), after(m.close) + 1.2, SAVE),
 
-				{ kind: 'card', len: 5.5, html: endCard, ...cues(END_GROUND, TALL) },
+				{ kind: 'card', len: 5.5, html: endCard, ...cues(END_GROUND, END_PULL) },
 			];
 		},
 	};

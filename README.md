@@ -21,6 +21,11 @@ restarting and resuming your session. If stretches still show open, see [Limits]
 Claude desktop app stretches are links: click one to open it in place, click `«` to close it. No
 setting needed.
 
+To update, run `claude plugin update cc-stretch@cc-stretch` in a shell, or open `/plugin`, find
+cc-stretch under Installed and choose Update now. As of Claude Code 2.1.302 a plugin from this
+marketplace updates on its own only once you turn on auto-update for the marketplace in `/plugin`'s
+Marketplaces tab.
+
 ## What to expect
 
 You read about a sixth of what Claude writes. Across 69 real replies from four of my coding

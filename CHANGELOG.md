@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.5.0 — 2026-10-17
+
+- You choose how closed stretches look. In the terminal's fullscreen layout, `/cc-stretch:style`
+  puts a toolbar above the prompt that restyles every reply as you click: marks (`bold`, `italic`,
+  `underline`, `strikethrough`, `dim`) and a highlight, either one colour from nine deep swatches or
+  `tinted`, which puts each closed stretch on the colour its words take once open, blended 75% into
+  the background. Under `tinted` a stretch's colour comes from its place in the reply, so it is the
+  same before and after it opens. `save` keeps the style in two plugin settings, `marks` and
+  `highlight`, which as of Claude Code 2.1.302 `/plugin`'s Configure options also edit; `close`
+  puts the toolbar away and drops a style you tried but did not save. With nothing set, phrases stay underlined. Contributed
+  by @gitsacha in [#12](https://github.com/pro-vi/cc-stretch/pull/12), reworked before merging.
+- Text in a paragraph that holds a stretch can be selected and copied: a drag highlights the cells
+  it crosses and copies their text on release, and a selection released outside the paragraph is
+  taken down. Links in such a paragraph are drawn as links, underlined in the suggestion colour. A
+  paragraph an earlier version drew no longer fails to draw after `/reload-plugins` updates the
+  plugin in place. Contributed by @leftos in [#13](https://github.com/pro-vi/cc-stretch/pull/13).
+- Saving a style while a reply streams no longer shows a long form's raw markup: as of Claude Code
+  2.1.302 each setting written reloads the plugin, and the streaming filter now keeps its place
+  across the reload. The updates of one reply, of which 2.1.302 runs up to three at once, are
+  filtered in order. On 2.1.299 and 2.1.300 an older reply keeps its stretches after a save.
+- The guide bench can write answers without a judge call, lay two guides' answers side by side,
+  and run chosen tasks; five tasks join the list, and a new layout rule counts links with no words.
+- A short film of what's new is attached to this release. `film/releases/0.5.0` records it in a
+  smaller terminal, so its text draws larger.
+
 ## 0.4.0 — 2026-10-16
 
 - Stretches open from the keyboard. In the terminal's fullscreen layout, alt+↓ or ctrl+↓ puts a

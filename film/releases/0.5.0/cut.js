@@ -21,7 +21,7 @@
 		install: '/plugin install cc-stretch --marketplace pro-vi/cc-stretch',
 		then: 'then /cc-stretch:style',
 		repo: 'github.com/pro-vi/cc-stretch',
-		thanks: 'Thanks to @gitsacha, whose pull request started this.',
+		thanks: 'Thanks to @gitsacha and @leftos for their pull requests.',
 	};
 	// The colours the tinted highlight is made from, at full strength: Claude Code 2.1.300's warning,
 	// autoAccept, planMode and claude, as BASE in hooks/register.tsx holds them.
@@ -73,7 +73,7 @@
 
 	// The end: a click stretches Clawd wide above the install line, sideways as a stretch grows along its
 	// line, and a second lets it go; it blinks once it has rung back to its shape. The last line thanks
-	// the pull request's author.
+	// the authors of the pull requests this release merged.
 	const END_GROUND = 360;
 	const END_PULL = clickPull(1.5, 1.5, 0.88);
 	function endCard(t) {

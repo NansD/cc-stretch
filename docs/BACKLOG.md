@@ -6,15 +6,20 @@ Checkbox marks a lane consumed (plan written, or direct commit landed).
 ## Lanes
 
 - [ ] **plugin-folder** — an install copies the plugin, not the repo's dev tools · verdict: direct · waits on: the uncommitted changes to `bench/replay.ts` and `bench/labels.ts` landing or being dropped
-- [ ] **renderers-use-drawn-as** — every renderer draws a stretch the way `drawnAs` says · verdict: direct · waits on: PR #12 merged or closed
+- [ ] **renderers-use-drawn-as** — every renderer draws a stretch the way `drawnAs` says · verdict: direct
 - [ ] **keyboard-item-words** — the list rule finds the reply item by the words a reply uses for it · verdict: direct
 - [ ] **judge-controls** — a grading run whose judge misgrades a known answer is refused · verdict: direct
 - [ ] **bench-one-copy** — each prompt, flag list and scoring rule in the bench exists once · verdict: defer · promote when: the README's numbers are next rerun
 - [ ] **letters-with-ime** — letters work with an input method on, or the README says to switch it off · verdict: pending · needs: a live session with a Chinese or Japanese input method
 - [ ] **bench-outside-git** — the bench runs from a source archive · verdict: defer · signal: `Command failed: git rev-parse HEAD` · promote when: someone runs the bench from an archive
 - [ ] **replay-counts-recomputed** — published replay counts follow the current measurement · verdict: defer · signal: none · promote when: a change to what the skim counts
-- [ ] **nested-key-separator** — no two stretches in a reply share a key · verdict: defer · signal: none · promote when: a stretch opens a different one
+- [ ] **nested-key-separator** — no two stretches in a reply share a key · verdict: defer · signal: none · promote when: a stretch opens a different one, or opens in its holder's colour
 - [ ] **row-start-style** — a paragraph's first row never shows the previous row's style · verdict: defer · signal: none · promote when: a stray underline is reported or filmed
+- [ ] **old-replies-live** — on Claude Code 2.1.300, a reply from before a style save keeps its stretches · verdict: pending · needs: a live session on Claude Code 2.1.299 or 2.1.300
+- [ ] **theme-read** — stretch colours follow the theme the screen shows · verdict: defer · signal: none · promote when: a reader on a light screen reports dark highlights
+- [ ] **tinted-256** — the four tinted highlights stay four colours on a 256-colour terminal · verdict: defer · signal: none · promote when: a reader reports two tinted stretches in one colour
+- [ ] **tinted-neighbours** — stretches side by side on screen differ in tinted colour · verdict: pending · needs: a design call on whether neighbours on screen must differ
+- [ ] **open-colour-gap** — opened words are in their colour from their first frame · verdict: defer · signal: none · promote when: the gap shows in a recorded take
 
 ## plugin-folder
 
@@ -36,7 +41,8 @@ decide on their own whether a stretch is drawn as text, open or a link. `drawnAs
 `hooks/parse.ts` says it once, and `hooks/layout.ts` and the bench use it. `writeOpen` does not
 check `isClosed`, so where every stretch is drawn open, an unclosed `{{a|b` shows `b`; everywhere
 else it shows `a`. Derive all three from `drawnAs` and extend the parity test in
-`tests/drawn.test.tsx` to the desktop path. PR #12 changes both files, so land this after it.
+`tests/drawn.test.tsx` to the desktop path. PR #12, merged in a65fbb8, changed both files; the three
+functions are still there after it.
 
 ## keyboard-item-words
 
@@ -103,12 +109,16 @@ switch the input method off first.
 - Failure sequence: `{{a › b|x}} {{a|{{b|y}}}}` keys as `a › b`, `a`, `a › b` (checked at
   ec1b1d7). The open list and the keyboard letters address stretches by key, so they cannot tell
   the first stretch from the nested one.
+- The colour an opened stretch takes has the same cause. The open order finds a stretch's holder with
+  `parentOf(opened.key)` in `hooks/register.tsx`. In `{{p|x {{q › r|y}}}}` the nested key is
+  `p › q › r`, whose holder reads as `p › q`, a key no stretch has, so the nested stretch is not kept
+  off p's colour. The tinted highlight passes the holder down the parse and is not affected.
 - Signal: none. Nothing reports two stretches with one key.
 - Promote when: someone reports a stretch that opens a different one, or keys change for another
   reason.
 - Fix shape: join keys with a character a short form cannot hold, such as a noncharacter. That
   changes every nested stretch's key, so open lists saved before it read nested stretches as closed
-  once.
+  once. The open order can take a stretch's holder from the parse, as `placesOf` does.
 
 ## row-start-style
 
@@ -125,3 +135,64 @@ switch the input method off first.
 - Promote when: a user reports a stray underline, or the next release film shows it.
 - Acceptance: recording the same reply in Terminal.app tells Claude Code from WezTerm; with the
   layer known, no styled row start in a take's growth frames.
+
+## old-replies-live
+
+Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site a reply as the streaming filter left
+it, with its long forms gone. `rawOf` in `hooks/register.tsx` finds the markup again: a reply the
+plugin did not keep, such as one from before a style save reloaded the plugin, is found by reading
+the session's messages once per load. Only the plugin test engine covers this; 0.5.0's live checks
+ran on 2.1.302. Acceptance: on 2.1.300, a reply drawn before `/cc-stretch:style` and a save still
+shows its stretches after the save.
+
+## theme-read
+
+- Problem: `isLight` in `hooks/register.tsx` reads the `theme` row from `$.config.list` and takes
+  any value that does not start with `light` as dark. As of Claude Code 2.1.302 the row holds the
+  setting, so `auto` reads as `auto`, not as the theme it resolves to.
+- Failure sequence: theme `auto` on a light screen, a `custom:<name>` theme, a theme row another
+  plugin hides, or a list that fails. Under tinted, closed stretches sit on the dark palette's
+  near-black highlights (`#403002`, `#2c2240`, `#122623`, `#361e16`), readable with light text but
+  not the pale ones meant for a light screen. Opened words take the dark palette's colours on white,
+  at 1.3–1.9:1 contrast, as they did before 0.5.0.
+- The read runs on every draw of a reply that is tinted or has an open stretch. A theme change is
+  not one of the render hook's triggers, so a reply keeps its palette until it redraws for another
+  reason, and two replies can show two palettes. The read's cost per draw is unmeasured.
+- Signal: none.
+- Promote when: a reader on a light screen reports dark highlights.
+- Fix shape: classify the value explicitly (`light*`, `dark*`, and a stated choice for `auto`,
+  `custom:*` and no row), with tests for a light row, an `auto` row and a failed list. Whether the
+  read can leave the draw depends on Claude Code telling a plugin the theme changed; unchecked.
+
+## tinted-256
+
+- Problem: the tinted highlights are 24-bit colours. A terminal that shows 256 colours draws each as
+  the nearest of its own.
+- Failure sequence: by ansi-styles' 256-colour formula, on dark places 0 and 3 (`#403002`,
+  `#361e16`) both become index 58, and on light places 0 and 2 both become 188. The first and fourth
+  stretch on dark, or the first and third on light, then share a highlight. Computed, not seen on a
+  256-colour terminal.
+- Signal: none.
+- Promote when: a reader reports two tinted stretches in one colour.
+- Fix shape: choose the highlight mixes so the four land on four different 256-colour indexes on
+  each theme, and test that with the same formula.
+
+## tinted-neighbours
+
+Under tinted, `placesOf` in `hooks/register.tsx` counts places in reading order, depth first, so
+stretches hidden inside a closed one use up colours. In `A {{a|x {{b|1}} {{c|2}} {{d|3}}}} and
+{{e|4}}.` a takes place 0 and e place 4, so the two closed stretches on screen share a colour. In
+`{{p|p {{a|a {{a1|x}} {{a2|y}}}} {{b|b1}}}}` a takes 1 and b 5: the skip past p's colour lands on a's,
+so the two siblings in p's open text match. Counting this way gives each stretch one colour before
+and after it opens; making neighbours on screen differ is weighed against that.
+
+## open-colour-gap
+
+- Problem: the words a stretch adds take their colour from `tints`, which holds only stretches already
+  in the open order. The hooks write that after the reply's Client posts the press, so until the
+  next draw the growing words are drawn with no colour, in every style. Older than 0.5.0.
+- Signal: none. The tests wait 2000 ms before reading colours, so they do not see it, and the gap is
+  untimed.
+- Promote when: the gap shows in a recorded take, or a reader reports it.
+- Fix shape: under tinted the colour is known before the press, so the Client can be given each
+  stretch's word colours along with its highlight.

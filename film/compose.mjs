@@ -21,12 +21,15 @@ const FPS = 30;
 const stills = process.argv.find((a) => a.startsWith('--stills='))?.slice(9).split(',').map(Number);
 
 // A row that reports the account's usage limits is personal, not part of the feature: it is blanked.
-const PRIVATE = /weekly limit|usage limit|resets .* at \d|\/usage/i;
+// That includes a status line's five-hour and seven-day windows, such as `12m/5h 10%` and `2d/7d 10%`.
+const PRIVATE = /weekly limit|usage limit|resets .* at \d|\/usage|\/5h\b|\/7d\b/i;
 // As of WezTerm 20260905-195314-b99b1ca2, a user-variable sequence written while the pane draws can
 // land in its cells as text, on the composer's border, pushing the border's end onto the next row.
 // The border is drawn whole again and the pushed-over end dropped.
 const LEAK = /\uFFFD?\]1337;SetUserVar=\S*?=+[A-Za-z0-9+/]*=*/;
 function readTake(dir) {
+	const marks = JSON.parse(readFileSync(`${dir}/marks.json`, 'utf8'));
+	const cols = marks.size?.cols ?? 100;
 	// A row's text, and its runs as last drawn with its margin plain.
 	const clean = new Map();
 	const frames = readFileSync(`${dir}/frames.jsonl`, 'utf8').trim().split('\n').map((line) => {
@@ -55,13 +58,13 @@ function readTake(dir) {
 		});
 		rows.forEach((runs, i) => {
 			if (!LEAK.test(runs.map((r) => r.text).join(''))) return;
-			rows[i] = [{ ...runs[0], text: '─'.repeat(100), col: 0 }];
+			rows[i] = [{ ...runs[0], text: '─'.repeat(cols), col: 0 }];
 			const next = rows[i + 1]?.[0];
 			if (next?.col === 0 && /^─+\S/.test(next.text)) next.text = next.text.replace(/^─+/, (bar) => ' '.repeat(bar.length));
 		});
 		return { t: f.t, rows };
 	});
-	return { frames, marks: JSON.parse(readFileSync(`${dir}/marks.json`, 'utf8')) };
+	return { frames, marks };
 }
 
 const browser = await chromium.launch();

@@ -33,8 +33,8 @@ html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; backgro
 #term .bar { height: 46px; display: flex; align-items: center; gap: 10px; padding-left: 20px; background: #24221f; }
 #term .bar i { width: 14px; height: 14px; border-radius: 50%; background: #4a4640; display: block; }
 #term .bar span { margin-left: 18px; font: 500 17px/1 var(--sans); color: #8d877d; }
-#term { width: 1476px; }
-#rows { position: relative; width: 1440px; height: 990px; margin: 14px 18px 18px; font: 400 24px/1 var(--mono); color: var(--term-fg); }
+/* Its width and its rows' size come from setTermSize in kit.js, by the take's size in cells. */
+#rows { position: relative; margin: 14px 18px 18px; font: 400 24px/1 var(--mono); color: var(--term-fg); }
 #rows .row { position: absolute; left: 0; height: 33px; width: 100%; white-space: pre; }
 #rows .row span { position: absolute; top: 4px; }
 #caption { position: absolute; left: 0; right: 0; top: 0; z-index: 5; padding: 52px 0 46px; text-align: center; font: 500 46px/1.2 var(--sans); letter-spacing: -.01em; color: var(--ink);

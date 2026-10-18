@@ -1,7 +1,10 @@
 // What every film page shares: the frame's geometry and easing, the recorded take's frames, the
 // terminal drawn cell by cell from them, the camera on it, Clawd, and the cards. A film page loads
 // this before its own script; compose.mjs injects window.TAKE before the first frame.
-const W = 1920, H = 1080, COLS = 100, ROWS = 30, CELL_W = 14.4, CELL_H = 33;
+const W = 1920, H = 1080, CELL_W = 14.4, CELL_H = 33;
+// The recorded pane's size in cells, set by setTermSize below: 100 × 30 unless the take was recorded
+// at another size. Variables, not constants, though written in capitals as film.html reads ROWS.
+let COLS, ROWS, TERM_W, TERM_H;
 const clamp = (x, a = 0, b = 1) => Math.min(b, Math.max(a, x));
 const ease = (k) => (k < .5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
 const lerp = (a, b, k) => a + (b - a) * k;
@@ -35,11 +38,19 @@ const QUADS = {
 	'▛': [UL, UR, LL], '▜': [UL, UR, LR], '▙': [UL, LL, LR], '▟': [UR, LL, LR],
 };
 let shownFrame = null;
+// Claude Code's header draws Clawd in block characters at the top left: as of 2.1.302 in rows 1 to 3,
+// columns 0 to 9, until the header scrolls. Its cells are drawn into one piece, .logo, so a scene can
+// hop and stretch it.
+const LOGO = { firstRow: 1, lastRow: 3, width: 10 };
 function drawRows(frame) {
 	if (frame === shownFrame) return;
 	shownFrame = frame;
 	const host = $('rows');
 	host.innerHTML = '';
+	const logo = document.createElement('div');
+	logo.className = 'logo';
+	logo.style.cssText = `position:absolute;left:0;top:0;transform-origin:${(LOGO.width / 2) * CELL_W}px ${(LOGO.lastRow + 1) * CELL_H}px`;
+	host.appendChild(logo);
 	frame.rows.forEach((runs, r) => {
 		const row = document.createElement('div');
 		row.className = 'row';
@@ -51,10 +62,11 @@ function drawRows(frame) {
 				for (const ch of run.text) {
 					const quads = QUADS[ch];
 					if (quads !== undefined) {
+						const isLogo = r >= LOGO.firstRow && r <= LOGO.lastRow && col < LOGO.width;
 						for (const [qx, qy, qw, qh] of quads) {
 							const b = document.createElement('i');
-							b.style.cssText = `position:absolute;left:${(col + qx) * CELL_W}px;top:${qy * CELL_H}px;width:${qw * CELL_W + 1.2}px;height:${qh * CELL_H + 1.2}px;background:${run.fg ?? 'var(--term-fg)'}`;
-							row.appendChild(b);
+							b.style.cssText = `position:absolute;left:${(col + qx) * CELL_W}px;top:${((isLogo ? r : 0) + qy) * CELL_H}px;width:${qw * CELL_W + 1.2}px;height:${qh * CELL_H + 1.2}px;background:${run.fg ?? 'var(--term-fg)'}`;
+							(isLogo ? logo : row).appendChild(b);
 						}
 					} else if (ch !== ' ') {
 						const g = document.createElement('span');
@@ -83,7 +95,17 @@ function drawRows(frame) {
 		host.appendChild(row);
 	});
 }
-const TERM_W = COLS * CELL_W + 36, TERM_H = ROWS * CELL_H + 46 + 32;
+/** Draws the terminal at the size its take was recorded at, in cells. */
+function setTermSize(cols, rows) {
+	COLS = cols;
+	ROWS = rows;
+	TERM_W = COLS * CELL_W + 36;
+	TERM_H = ROWS * CELL_H + 46 + 32;
+	$('term').style.width = `${TERM_W}px`;
+	$('rows').style.width = `${COLS * CELL_W}px`;
+	$('rows').style.height = `${ROWS * CELL_H}px`;
+}
+setTermSize(100, 30);
 function placeTerm(zoom, focusRow, lift = 0) {
 	const fit = Math.min((W - 160) / TERM_W, (H - 230) / TERM_H);
 	const s = fit * zoom;
@@ -98,6 +120,8 @@ function cellToScreen(cam, row, col) {
 	return { x: cam.x + (18 + (col + 0.5) * CELL_W) * cam.s, y: cam.y + (46 + 14 + (row + 0.6) * CELL_H) * cam.s };
 }
 
+/** The colour of each sprite pixel that is not Clawd's body: its eyes, and a drop of sweat. */
+const PIXEL = { K: '#1f1e1b', B: '#6cb4ee' };
 const SPRITE = {
 	idle: ['..XXXXXXXXXX..', '..XXKXXXXKXX..', '..XXKXXXXKXX..', 'XXXXXXXXXXXXXX', '..XXXXXXXXXX..', '..XXXXXXXXXX..', '..X.X....X.X..', '..X.X....X.X..'],
 	walk: ['..XXXXXXXXXX..', '..XXKXXXXKXX..', '..XXKXXXXKXX..', 'XXXXXXXXXXXXXX', '..XXXXXXXXXX..', '..XXXXXXXXXX..', '...X.X..X.X...', '...X.X..X.X...'],
@@ -112,7 +136,7 @@ function drawClawd(c) {
 	ctx.clearRect(0, 0, 14, 8);
 	SPRITE[c.pose].forEach((line, y) => [...line].forEach((p, x) => {
 		if (p === '.') return;
-		ctx.fillStyle = p === 'K' ? '#1f1e1b' : p === 'B' ? '#6cb4ee' : '#d97757';
+		ctx.fillStyle = PIXEL[p] ?? '#d97757';
 		ctx.fillRect(x, y, 1, 1);
 	}));
 	el.style.opacity = c.alpha ?? 1;
@@ -120,6 +144,52 @@ function drawClawd(c) {
 	el.style.height = `${8 * c.px}px`;
 	el.style.transform = `translate(${c.x}px, ${c.y}px) scaleX(${c.flip ? -1 : 1}) rotate(${c.rot ?? 0}deg)`;
 }
+// --- Clawd as SVG, so a scene can squash, stretch and tint as many of it as it likes ----------------
+
+/**
+ * Clawd's pixels as an SVG string, `px` screen pixels to a sprite pixel, standing with its feet at
+ * (x, y + 8 × px). It squashes and stretches about its feet, so it stays on the ground it stands on.
+ */
+function clawdSvg({ pose = 'idle', colour = '#d97757', px = 14, x = 0, y = 0, sx = 1, sy = 1 }) {
+	const cells = SPRITE[pose].flatMap((line, row) => [...line].flatMap((p, col) => (p === '.' ? [] : [`<rect x="${col}" y="${row}" width="1.02" height="1.02" fill="${PIXEL[p] ?? colour}"/>`])));
+	return `<svg viewBox="0 0 14 8" width="${14 * px}" height="${8 * px}" shape-rendering="crispEdges" style="position:absolute;left:${x}px;top:${y}px;overflow:visible;transform-origin:50% 100%;transform:scale(${sx.toFixed(3)},${sy.toFixed(3)})">${cells.join('')}</svg>`;
+}
+
+/** A shape squashed (sy < 1) or stretched (sy > 1) that keeps about the area it covers. */
+const keepArea = (sy) => ({ sy, sx: 1 / sy ** 0.85 });
+
+/**
+ * One of a run of hops of `period` seconds that began at time 0: how high above the ground, and how
+ * squashed (sy < 1, wider) or stretched (sy > 1, narrower) by how fast it moves. It is squashed most
+ * as it lands, and the area it covers stays about the same.
+ */
+function hop(t, period, height, squash = 0.3) {
+	if (t < 0) return { lift: 0, sx: 1, sy: 1 };
+	const p = (t % period) / period, GROUND = 0.09, STRETCH = 0.22;
+	const contact = Math.min(p, 1 - p);
+	if (contact < GROUND) return { lift: 0, ...keepArea(lerp(1 - squash, 1 + STRETCH, contact / GROUND)) };
+	const q = (p - GROUND) / (1 - 2 * GROUND);
+	return { lift: height * 4 * q * (1 - q), ...keepArea(1 + STRETCH * Math.abs(1 - 2 * q) ** 2) };
+}
+
+/** When the first `count` hops of `period` seconds, begun at `start`, land: where a thud sounds. */
+const landings = (start, period, count) => Array.from({ length: count }, (_, i) => start + (i + 1) * period);
+
+/** A spring let go `t` seconds ago at `from`, ringing down onto `to`. */
+function spring(t, from, to, freq = 2.6, damping = 4.2) {
+	if (t <= 0) return from;
+	return to + (from - to) * Math.exp(-damping * t) * Math.cos(2 * Math.PI * freq * t);
+}
+
+/**
+ * Pulled from its own shape to (sx, sy) between `from` and `full` seconds, held there, and let go at
+ * `go` to ring back: a stretch opening and snapping shut.
+ */
+function pulled(t, { from, full, go, sx, sy, freq, damping }) {
+	if (t < go) { const k = ease(span(t, from, full)); return { sx: lerp(1, sx, k), sy: lerp(1, sy, k) }; }
+	return { sx: spring(t - go, sx, 1, freq, damping), sy: spring(t - go, sy, 1, freq, damping) };
+}
+
 function bubble(text, x, y, alpha) {
 	const b = $('bubble');
 	b.textContent = text;

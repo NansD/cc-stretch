@@ -1,6 +1,7 @@
 // The instruments every film's soundtrack is played on: a soft FM electric piano, pads, a music-box
-// bell, a sub, ticks for clicks and runs of typing, a brown switch for a single key, and a chiptune
-// square, through one compressor and room, with the phrases more than one film plays on them.
+// bell, a sub, ticks for clicks and runs of typing, a brown switch for a single key, a boing for a
+// spring let go, a thud for a landing, and a chiptune square, through one compressor and room, with
+// the phrases more than one film plays on them.
 // window.playFilm(total, arrange) builds them for `total` seconds, lets `arrange` place the notes, renders
 // offline, and resolves a 16-bit stereo WAV as base64.
 window.playFilm = async (total, arrange) => {
@@ -79,10 +80,15 @@ window.playFilm = async (total, arrange) => {
 		g.gain.setValueAtTime(0, at); g.gain.linearRampToValueAtTime(vel, at + 0.05); g.gain.exponentialRampToValueAtTime(0.0001, at + len);
 		o.connect(g).connect(master); o.start(at); o.stop(at + len + 0.05);
 	}
+	/** Noise `len` seconds long that dies away by a factor of e every `decay` seconds. */
+	function noise(len, decay) {
+		const b = ctx.createBuffer(1, Math.ceil(RATE * len), RATE), d = b.getChannelData(0);
+		for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (RATE * decay));
+		return b;
+	}
 	/** A soft tick, a mouse button or a key in a run of typing: a short, low-passed knock with a little body under it. */
 	function tick(at, freq, vel) {
-		const len = 0.03, b = ctx.createBuffer(1, Math.ceil(RATE * len), RATE), d = b.getChannelData(0);
-		for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (RATE * 0.004));
+		const b = noise(0.03, 0.004);
 		const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), soft = ctx.createBiquadFilter(), g = ctx.createGain();
 		s.buffer = b; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = 2.5; soft.type = 'lowpass'; soft.frequency.value = 3200; g.gain.value = vel;
 		s.connect(f).connect(soft).connect(g).connect(fx); s.start(at);
@@ -99,8 +105,7 @@ window.playFilm = async (total, arrange) => {
 	function brownSwitch(at, vel = 0.5) {
 		const jitter = 1 + (Math.random() - 0.5) * 0.08;
 		const burst = (t, freq, q, decay, gain) => {
-			const b = ctx.createBuffer(1, Math.ceil(RATE * decay * 6), RATE), d = b.getChannelData(0);
-			for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (RATE * decay));
+			const b = noise(decay * 6, decay);
 			const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
 			s.buffer = b; f.type = 'bandpass'; f.frequency.value = freq * jitter; f.Q.value = q; g.gain.value = gain;
 			s.connect(f).connect(g).connect(fx); s.start(t);
@@ -116,6 +121,43 @@ window.playFilm = async (total, arrange) => {
 		ring(at + 0.012, 520, 0.045, vel * 0.25);
 		burst(at + 0.11, 2800, 1.6, 0.003, vel * 0.45);
 		ring(at + 0.11, 640, 0.03, vel * 0.1);
+	}
+	/**
+	 * A spring let go: a soft tone that leaps up in pitch and wobbles back down as its swing dies, the
+	 * cartoon sound of a stretched thing snapping back, with a triangle an octave under it for body.
+	 */
+	function boing(at, vel = 0.09) {
+		const from = 170, peak = 430;
+		for (const [type, scale, gain] of [['sine', 1, vel], ['triangle', 0.5, vel * 0.45]]) {
+			const o = ctx.createOscillator(), wobble = ctx.createOscillator(), depth = ctx.createGain(), amp = ctx.createGain();
+			o.type = type;
+			o.frequency.setValueAtTime(from * scale, at);
+			o.frequency.exponentialRampToValueAtTime(peak * scale, at + 0.07);
+			o.frequency.exponentialRampToValueAtTime(peak * 0.62 * scale, at + 0.55);
+			wobble.frequency.value = 17;
+			depth.gain.setValueAtTime(peak * 0.16 * scale, at + 0.04);
+			depth.gain.exponentialRampToValueAtTime(0.5, at + 0.55);
+			wobble.connect(depth).connect(o.frequency);
+			amp.gain.setValueAtTime(0, at);
+			amp.gain.linearRampToValueAtTime(gain, at + 0.012);
+			amp.gain.exponentialRampToValueAtTime(0.0001, at + 0.6);
+			o.connect(amp).connect(fx);
+			o.start(at); wobble.start(at); o.stop(at + 0.62); wobble.stop(at + 0.62);
+		}
+	}
+	/** A soft landing: a low tone falling away under a short, muffled puff of noise. */
+	function thud(at, vel = 0.12) {
+		const o = ctx.createOscillator(), amp = ctx.createGain();
+		o.frequency.setValueAtTime(120, at);
+		o.frequency.exponentialRampToValueAtTime(48, at + 0.16);
+		amp.gain.setValueAtTime(0, at);
+		amp.gain.linearRampToValueAtTime(vel, at + 0.004);
+		amp.gain.exponentialRampToValueAtTime(0.0001, at + 0.22);
+		o.connect(amp).connect(fx);
+		o.start(at); o.stop(at + 0.24);
+		const n = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+		n.buffer = noise(0.12, 0.02); f.type = 'lowpass'; f.frequency.value = 700; g.gain.value = vel * 0.5;
+		n.connect(f).connect(g).connect(fx); n.start(at);
 	}
 	function square(at, midi, len, vel = 0.035, type = 'square') {
 		const o = ctx.createOscillator(), g = ctx.createGain();
@@ -145,7 +187,7 @@ window.playFilm = async (total, arrange) => {
 	const bellPair = (at) => { bell(at + 0.3, 81, 0.04); bell(at + 0.6, 85, 0.035); };
 	/** Clawd's two-note chirp. */
 	const chirp = (at) => { square(at, 84, 0.08); square(at + 0.12, 91, 0.12); };
-	arrange({ ctx, master, BEAT, ep, bell, pad, tick, brownSwitch, square, CHORDS, TONIC, walk, clickTicks, held, bellPair, chirp });
+	arrange({ ctx, master, BEAT, ep, bell, pad, tick, brownSwitch, square, boing, thud, CHORDS, TONIC, walk, clickTicks, held, bellPair, chirp });
 
 	const rendered = await ctx.startRendering();
 	const n = rendered.length, bytes = new DataView(new ArrayBuffer(44 + n * 4));

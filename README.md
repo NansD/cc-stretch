@@ -109,7 +109,8 @@ never lose your place.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.
 - Built on Claude Code's function-hook plugin API, which is early access and changes between
   releases. Checked in the terminal on macOS with Claude Code 2.1.292 to 2.1.294 and 2.1.300 to
-  2.1.302, and in the Claude desktop app with 2.1.295.
+  2.1.302, and in the Claude desktop app with 2.1.295. On Linux, a reader reports clicks working with
+  2.1.302 in a terminal pane of the Orca app ([#14](https://github.com/pro-vi/cc-stretch/issues/14)).
 - A terminal session that also has the desktop app attached shows the markup while a reply streams,
   because the desktop builds its links from it.
 

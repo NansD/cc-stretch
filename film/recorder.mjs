@@ -4,11 +4,12 @@
 // writes frames.jsonl and marks.json into `out`. Needs WezTerm and a signed-in `claude`. Record with
 // the machine otherwise idle: under load the pane redraws a few times a second, so a stretch's growth
 // crawls across the take and a settle can time out (two takes failed at a load average of 121).
+// The live checks in film/e2e/ build on its openPane, claudePath and keepSettings.
 import { execFile, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { promisify } from 'node:util';
-import { lettersOn, linksOn, parseScreen, plainRows, pressablesOn } from './screen.mjs';
+import { lettersOn, linksOn, parseScreen, plainRows, pressablesOn, turnsDone } from './screen.mjs';
 
 const run = promisify(execFile);
 export const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
@@ -21,10 +22,10 @@ export const ALT_DOWN = '\x1b[1;3B', ALT_UP = '\x1b[1;3A';
 /**
  * Keeps the settings files a session can write, and returns what puts them back: each file the
  * session changed is written back byte for byte, or removed if the session made it, when the plugin's
- * own entry (`pluginConfigs['cc-stretch@inline']`, as a --plugin-dir session saves it) is its only
- * change; any other change is left and named.
+ * own entry (`pluginConfigs['cc-stretch@inline']`, as a --plugin-dir session saves it as of Claude
+ * Code 2.1.302) is its only change; any other change is left and named.
  */
-function keepSettings() {
+export function keepSettings() {
 	const kept = [`${homedir()}/.claude/settings.json`, `${REPO}/.claude/settings.json`, `${REPO}/.claude/settings.local.json`].map((file) => [file, existsSync(file) ? readFileSync(file) : null]);
 	return () => {
 		for (const [file, before] of kept) {
@@ -46,6 +47,70 @@ function keepSettings() {
 	};
 }
 
+/** The `claude` a login shell finds. */
+export const claudePath = () => execFileSync('zsh', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
+
+/**
+ * Opens a WezTerm pane of `cols` × `rows` cells running `command` in this repo, beside two plain
+ * shells that hold it to that size, and records every change of its screen into `frames` with the
+ * seconds since `t0`, which is now unless given. A session started with `--debug-file <debugFile>` is
+ * clicked in the unit its log says it reads. close() stops the recording and closes the three panes.
+ */
+export function openPane({ cols, rows, command, t0, frames = [], debugFile }) {
+	const base = wez('spawn', '--cwd', REPO, '--', 'zsh', '-f');
+	const lower = wez('split-pane', '--pane-id', base, '--bottom', '--cells', String(rows), '--', 'zsh', '-f');
+	const pane = wez('split-pane', '--pane-id', lower, '--right', '--cells', String(cols), '--cwd', REPO, '--', ...command);
+	const size = JSON.parse(execFileSync('wezterm', ['cli', 'list', '--format', 'json'], { encoding: 'utf8' })).find((p) => String(p.pane_id) === pane)?.size;
+	if (size === undefined) throw new Error(`pane ${pane} is not in wezterm cli list`);
+	t0 ??= Date.now();
+	const send = (keys) => wez('send-text', '--pane-id', pane, '--no-paste', keys);
+	// As of Claude Code 2.1.302 a session reads the pointer in cells, counted from 1, until its debug log
+	// says it reads pixels; a pixel is sent at the cell's middle, from the pane's size. Without a log
+	// the session is taken to read pixels, as it does once a reply holding a stretch is drawn.
+	const isPixels = () => {
+		if (debugFile === undefined) return true;
+		try {
+			return readFileSync(debugFile, 'utf8').includes('Mouse reports in pixels');
+		} catch {
+			return false;
+		}
+	};
+
+	let last = '';
+	let isRecording = true;
+	const recording = (async () => {
+		while (isRecording) {
+			const { stdout } = await run('wezterm', ['cli', 'get-text', '--pane-id', pane, '--escapes'], { maxBuffer: 1 << 24 });
+			if (stdout !== last) {
+				frames.push({ t: (Date.now() - t0) / 1000, screen: stdout });
+				last = stdout;
+			}
+		}
+	})();
+	return {
+		t0,
+		size,
+		frames,
+		/** The screen as last recorded, escapes and all. */
+		last: () => last,
+		send,
+		/** Sends a mouse report for `button` over a cell, a release when `isUp`; returns whether it was in pixels. */
+		mouse(button, row, col, isUp = false) {
+			const pixels = isPixels();
+			const [x, y] = pixels ? [Math.round((col + 0.5) * size.pixel_width / size.cols), Math.round((row + 0.5) * size.pixel_height / size.rows)] : [col + 1, row + 1];
+			send(`\x1b[<${button};${x};${y}${isUp ? 'm' : 'M'}`);
+			return pixels;
+		},
+		async close() {
+			isRecording = false;
+			await recording;
+			for (const id of [pane, lower, base]) {
+				try { wez('kill-pane', '--pane-id', id); } catch {}
+			}
+		},
+	};
+}
+
 /**
  * Starts a session with this repo's plugin and begins recording. `append` is added to the
  * system prompt, to keep a demo session to the feature. The pane is `cols` × `rows` cells, saved in
@@ -56,44 +121,23 @@ function keepSettings() {
  */
 export async function startTake({ out, append, cols = 100, rows = 30, sources = 'project,local' }) {
 	const putSettingsBack = sources.split(',').includes('user') ? keepSettings() : () => {};
-	const claude = execFileSync('zsh', ['-lc', 'command -v claude'], { encoding: 'utf8' }).trim();
 	mkdirSync(out, { recursive: true });
-	const base = wez('spawn', '--cwd', REPO, '--', 'zsh', '-f');
-	const lower = wez('split-pane', '--pane-id', base, '--bottom', '--cells', String(rows), '--', 'zsh', '-f');
-	const pane = wez('split-pane', '--pane-id', lower, '--right', '--cells', String(cols), '--cwd', REPO, '--',
-		'env', '-u', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_NO_FLICKER=1',
-		claude, '--plugin-dir', REPO, '--setting-sources', sources, '--model', 'opus', '--append-system-prompt', append);
+	const pane = openPane({
+		cols, rows,
+		command: ['env', '-u', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_NO_FLICKER=1',
+			claudePath(), '--plugin-dir', REPO, '--setting-sources', sources, '--model', 'opus', '--append-system-prompt', append],
+	});
+	const { frames, send } = pane;
+	const now = () => (Date.now() - pane.t0) / 1000;
 
-	// As of Claude Code 2.1.302 the session asks the terminal for pointer positions in pixels, so a click
-	// is sent at its cell's middle pixel, from the pane's size.
-	const size = JSON.parse(execFileSync('wezterm', ['cli', 'list', '--format', 'json'], { encoding: 'utf8' })).find((p) => String(p.pane_id) === pane)?.size;
-	if (size === undefined) throw new Error(`pane ${pane} is not in wezterm cli list`);
-	const cellPx = (row, col) => [Math.round((col + 0.5) * size.pixel_width / size.cols), Math.round((row + 0.5) * size.pixel_height / size.rows)];
-
-	const t0 = Date.now();
-	const now = () => (Date.now() - t0) / 1000;
-	const frames = [];
-	let last = '';
-	let isRecording = true;
-	const recorder = (async () => {
-		while (isRecording) {
-			const { stdout } = await run('wezterm', ['cli', 'get-text', '--pane-id', pane, '--escapes'], { maxBuffer: 1 << 24 });
-			if (stdout !== last) {
-				frames.push({ t: now(), screen: stdout });
-				last = stdout;
-			}
-		}
-	})();
-
-	const screen = () => parseScreen(last);
+	const screen = () => parseScreen(pane.last());
 	const text = () => plainRows(screen()).join('\n');
-	// The size the pane was given, which the clicks above are measured against too.
-	const marks = { size: { cols: size.cols, rows: size.rows } };
+	// The size the pane was given, which clicks are measured against too.
+	const marks = { size: { cols: pane.size.cols, rows: pane.size.rows } };
 	const mark = (name, extra = {}) => {
 		marks[name] = { t: now(), ...extra };
 		console.log('mark', name, JSON.stringify(marks[name]));
 	};
-	const send = (keys) => wez('send-text', '--pane-id', pane, '--no-paste', keys);
 
 	async function waitFor(test, ms, what) {
 		const end = Date.now() + ms;
@@ -112,7 +156,7 @@ export async function startTake({ out, append, cols = 100, rows = 30, sources = 
 		const end = Date.now() + ms;
 		while (Date.now() < end) {
 			const lastChange = frames.at(-1)?.t ?? 0;
-			if (lastChange > since && Date.now() - (t0 + lastChange * 1000) > quiet) return;
+			if (lastChange > since && Date.now() - (pane.t0 + lastChange * 1000) > quiet) return;
 			await sleep(100);
 		}
 		throw new Error('the screen never settled');
@@ -130,11 +174,10 @@ export async function startTake({ out, append, cols = 100, rows = 30, sources = 
 	/** Clicks the middle of a phrase, as a mouse would: press and release over its middle cell. */
 	async function click(name, found) {
 		const row = found.row, col = Math.floor((found.col + found.end) / 2);
-		const [x, y] = cellPx(row, col);
 		mark(name, { row, col, link: found.link });
-		send(`\x1b[<0;${x};${y}M`);
+		pane.mouse(0, row, col);
 		await sleep(70);
-		send(`\x1b[<0;${x};${y}m`);
+		pane.mouse(0, row, col, true);
 	}
 
 	/** Presses `keys` and marks it as `name`, with the letters the press put on screen once it settles. */
@@ -146,9 +189,6 @@ export async function startTake({ out, append, cols = 100, rows = 30, sources = 
 		console.log('letters', name, JSON.stringify(marks[name].letters));
 		return marks[name].letters;
 	}
-
-	// As of Claude Code 2.1.302 each finished turn ends with a line such as `✻ Baked for 15s · done 12:09 AM`.
-	const turnsDone = () => (text().match(/ · done /g) ?? []).length;
 
 	/**
 	 * Answers the question whether to trust the folder if it shows, and waits for an empty prompt.
@@ -175,21 +215,17 @@ export async function startTake({ out, append, cols = 100, rows = 30, sources = 
 		await type(question);
 		await sleep(600);
 		mark(`asked${suffix}`);
-		const before = turnsDone();
+		const before = turnsDone(text());
 		send('\r');
-		await waitFor(() => turnsDone() > before, 240000, `the reply to "${question}"`);
+		await waitFor((t) => turnsDone(t) > before, 240000, `the reply to "${question}"`);
 		await sleep(800);
 		mark(`replied${suffix}`);
 	}
 
 	async function finish() {
-		isRecording = false;
-		await recorder;
+		await pane.close();
 		writeFileSync(`${out}/frames.jsonl`, frames.map((f) => JSON.stringify(f)).join('\n'));
 		writeFileSync(`${out}/marks.json`, JSON.stringify(marks, null, 2));
-		for (const id of [pane, lower, base]) {
-			try { wez('kill-pane', '--pane-id', id); } catch {}
-		}
 		putSettingsBack();
 		console.log('frames', frames.length, 'seconds', frames.at(-1)?.t);
 	}

@@ -2,7 +2,7 @@
   "name": "cc-stretch-dev",
   "private": true,
   "type": "module",
-  "description": "Tools around the plugin: its tests, the benchmark and the film. The plugin itself needs none of this.",
+  "description": "Tools around the plugin: its tests, the benchmark, the film and the live checks. The plugin itself needs none of this.",
   "scripts": {
     "test": "claude plugin validate . && claude plugin test .",
     "typecheck": "tsc -p bench/tsconfig.json",

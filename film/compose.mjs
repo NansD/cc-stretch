@@ -12,7 +12,7 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright';
-import { parseScreen, plainRows } from './screen.mjs';
+import { LEAK, parseScreen, plainRows, PRIVATE } from './screen.mjs';
 
 const FILM = new URL('.', import.meta.url).pathname.replace(/\/$/, '');
 const release = process.argv.find((a) => a.startsWith('--release='))?.slice(10);
@@ -20,13 +20,6 @@ const OUT = release ? `${FILM}/out/releases/${release}` : `${FILM}/out`;
 const FPS = 30;
 const stills = process.argv.find((a) => a.startsWith('--stills='))?.slice(9).split(',').map(Number);
 
-// A row that reports the account's usage limits is personal, not part of the feature: it is blanked.
-// That includes a status line's five-hour and seven-day windows, such as `12m/5h 10%` and `2d/7d 10%`.
-const PRIVATE = /weekly limit|usage limit|resets .* at \d|\/usage|\/5h\b|\/7d\b/i;
-// As of WezTerm 20260905-195314-b99b1ca2, a user-variable sequence written while the pane draws can
-// land in its cells as text, on the composer's border, pushing the border's end onto the next row.
-// The border is drawn whole again and the pushed-over end dropped.
-const LEAK = /\uFFFD?\]1337;SetUserVar=\S*?=+[A-Za-z0-9+/]*=*/;
 function readTake(dir) {
 	const marks = JSON.parse(readFileSync(`${dir}/marks.json`, 'utf8'));
 	const cols = marks.size?.cols ?? 100;
@@ -56,6 +49,8 @@ function readTake(dir) {
 			const plainLead = { ...first, text: lead, fg: null, bg: null, bold: false, dim: false, italic: false, underline: false, inverse: false };
 			runs.splice(0, 1, plainLead, ...(first.text.length > lead.length ? [{ ...first, text: first.text.slice(lead.length), col: lead.length }] : []));
 		});
+		// A user-variable sequence that landed on the composer's border: the border is drawn whole again
+		// and the pushed-over end dropped.
 		rows.forEach((runs, i) => {
 			if (!LEAK.test(runs.map((r) => r.text).join(''))) return;
 			rows[i] = [{ ...runs[0], text: '─'.repeat(cols), col: 0 }];

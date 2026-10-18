@@ -107,6 +107,17 @@ export function parseScreen(text) {
 	return rows;
 }
 
+// A row that reports the account's usage limits is personal, not part of what is shown, so renderers
+// blank it. That includes a status line's five-hour and seven-day windows, such as `12m/5h 10%` and
+// `2d/7d 10%`.
+export const PRIVATE = /weekly limit|usage limit|resets .* at \d|\/usage|\/5h\b|\/7d\b/i;
+// As of WezTerm 20260905-195314-b99b1ca2, a user-variable sequence written while the pane draws can
+// land in its cells as text, on the composer's border, pushing the border's end onto the next row.
+export const LEAK = /\uFFFD?\]1337;SetUserVar=\S*?=+[A-Za-z0-9+/]*=*/;
+
+/** How many turns a screen's text shows finished: as of Claude Code 2.1.302 each ends with a line such as `✻ Baked for 15s · done 12:09 AM`. */
+export const turnsDone = (text) => (text.match(/ · done /g) ?? []).length;
+
 /** The screen's plain text, one string per row. */
 export function plainRows(rows) {
 	return rows.map((runs) => {

@@ -1,17 +1,27 @@
-// The text colour that reads on a highlight, shared by the reply and the toolbar; only the reply passes dim.
+// Colour arithmetic shared by the reply and the hooks module: the text colour that reads on a highlight,
+// and the mix and hex spelling the stretch palette is built from.
 
-type Rgb = [number, number, number]
+/** A colour's red, green and blue, 0 to 255 each. */
+export type Rgb = readonly [number, number, number]
+/** A colour written `#rgb` or `#rrggbb`. */
+export type Hex = `#${string}`
 
 const DARK: Rgb = [0x1c, 0x1c, 0x1c]
 const LIGHT: Rgb = [0xf2, 0xf2, 0xf2]
 /**
- * How far dim moves text toward its background: as of Claude Code 2.1.302 its dim grey sits 40% of the
- * way from text to background on both themes (153 between 255 and 0, 102 between 0 and 255).
+ * How far dim moves text toward its background: as of Claude Code 2.1.302 Claude Code's dim grey sits
+ * 40% of the way from text to background on both themes (153 between 255 and 0, 102 between 0 and 255).
  */
 const DIM_SHARE = 0.4
 
 /** A colour written as `#rrggbb`. */
-export const hex = (rgb: readonly number[]) => `#${rgb.map(v => v.toString(16).padStart(2, '0')).join('')}`
+export const hex = (rgb: Rgb): Hex => `#${rgb.map(v => v.toString(16).padStart(2, '0')).join('')}`
+
+/** `rgb` moved `share` of the way toward `toward`, channel by channel. */
+export function mix(rgb: Rgb, toward: Rgb, share: number): Rgb {
+  const channel = (at: 0 | 1 | 2) => Math.round(rgb[at] + (toward[at] - rgb[at]) * share)
+  return [channel(0), channel(1), channel(2)]
+}
 
 /** The red, green and blue of a `#rgb` or `#rrggbb` colour; undefined for anything else. */
 function rgbOf(colour: string): Rgb | undefined {
@@ -22,6 +32,9 @@ function rgbOf(colour: string): Rgb | undefined {
   return [channel(0), channel(2), channel(4)]
 }
 
+/** Whether a colour is written `#rgb` or `#rrggbb`. */
+export const isHex = (colour: string): colour is Hex => rgbOf(colour) !== undefined
+
 /** The relative luminance of a colour, as WCAG defines it. */
 function luminance(rgb: Rgb): number {
   const linear = (value: number) => {
@@ -31,25 +44,17 @@ function luminance(rgb: Rgb): number {
   return 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2])
 }
 
-/** The relative luminance of a `#rgb` or `#rrggbb` colour; undefined for anything else. */
-export function luminanceOf(colour: string): number | undefined {
-  const rgb = rgbOf(colour)
-  return rgb === undefined ? undefined : luminance(rgb)
-}
-
 const ratio = (a: number, b: number) => (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
 
 /**
  * Text that reads on a highlight: near black or near white, whichever contrasts more, and under dim
  * moved toward the highlight as dim moves text toward its background. Nothing for a colour that is
- * not hex (a theme name), whose luminance is unknown here.
+ * not hex, whose luminance is unknown here.
  */
-export function contrastOn(background: string, isDim = false): { color?: string } {
+export function contrastOn(background: string, isDim = false): { color?: Hex } {
   const backgroundRgb = rgbOf(background)
   if (backgroundRgb === undefined) return {}
   const bg = luminance(backgroundRgb)
   const text = ratio(bg, luminance(DARK)) >= ratio(bg, luminance(LIGHT)) ? DARK : LIGHT
-  if (!isDim) return { color: hex(text) }
-  const toward = (at: 0 | 1 | 2) => Math.round(text[at] + (backgroundRgb[at] - text[at]) * DIM_SHARE)
-  return { color: hex([toward(0), toward(1), toward(2)]) }
+  return { color: hex(isDim ? mix(text, backgroundRgb, DIM_SHARE) : text) }
 }

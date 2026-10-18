@@ -6,9 +6,10 @@ import { closeAfter, codeSpan, hideLongForms, isLinkable, isOpenable, KEY_SEPARA
 import type { Segment, StreamState, Stretch } from './parse'
 import { targetsIn } from './layout'
 import type { Action } from './layout'
-import { contrastOn, hex } from './contrast'
+import { contrastOn, hex, mix } from './contrast'
+import type { Hex, Rgb } from './contrast'
 import { isColour, isSameLook, lookOf, MARK_NAMES, marksSetting, storedLook, TINTED } from './look'
-import type { Look, Mark } from './look'
+import type { DrawnLook, Highlight, Look, Mark } from './look'
 import type { ReplyPost, ReplyProps, Tint } from './reply'
 
 const openStretches = atom({ plugin: 'cc-stretch', key: 'open' } as const, [])
@@ -27,7 +28,7 @@ const streamCheckpoints = atom({ plugin: 'cc-stretch', key: 'streams' } as const
 // The highlight colours the toolbar offers: deep colours, whose text turns light. A light highlight would draw
 // dark text on a light ground, as a selection does. No text colour is offered: links, code and the
 // words a click added already speak in colour.
-const SWATCHES = ['#264f78', '#1f3a5f', '#3b4261', '#4b3b6b', '#5c2a4a', '#5f2a2a', '#5c4a00', '#1e4d2b', '#1d4b4b']
+const SWATCHES = ['#264f78', '#1f3a5f', '#3b4261', '#4b3b6b', '#5c2a4a', '#5f2a2a', '#5c4a00', '#1e4d2b', '#1d4b4b'] as const
 
 // Claude Code 2.1.300 can start a session on the main screen even with fullscreen set, and the
 // variable overrides that.
@@ -39,26 +40,27 @@ const MAIN_SCREEN_NOTE =
 // The words a stretch adds are drawn in Claude Code's own theme colours (its 2.1.300 values for
 // warning, autoAccept, planMode and claude), mixed 45% toward the text colour so they tint rather
 // than shout. Each open stretch keeps its colour; all but the newest take a faded form of it, mixed
-// 35% toward the background, quieter but still that colour. In the tinted style a closed stretch is
-// highlighted in its colour mixed 65% toward the background, deep on the dark theme and pale on the
-// light one, where the text contrastOn picks reads at 8:1 or more.
-const BASE = {
+// 35% toward the background, quieter but still that colour. In the tinted highlight a closed stretch
+// sits on the same theme colour mixed 75% toward the background, deep on the dark theme and pale on the
+// light one; on both, the text contrastOn picks reads at 10:1 or more.
+const BASE: Record<'dark' | 'light', readonly [Rgb, Rgb, Rgb, Rgb]> = {
   dark: [[255, 193, 7], [175, 135, 255], [72, 150, 140], [215, 119, 87]],
   light: [[150, 108, 30], [135, 0, 255], [0, 102, 102], [215, 119, 87]],
 }
-const mix = (rgb: number[], toward: number, share: number) => rgb.map(v => Math.round(v + (toward - v) * share))
-const paletteOf = (base: number[][], text: number, background: number) =>
+const WHITE: Rgb = [255, 255, 255]
+const BLACK: Rgb = [0, 0, 0]
+const paletteOf = (base: readonly Rgb[], text: Rgb, background: Rgb) =>
   base.map(rgb => {
     const soft = mix(rgb, text, 0.45)
-    return { soft: hex(soft), faded: hex(mix(soft, background, 0.35)), highlight: hex(mix(rgb, background, 0.65)) }
+    return { soft: hex(soft), faded: hex(mix(soft, background, 0.35)), highlight: hex(mix(rgb, background, 0.75)) }
   })
-const PALETTES = { dark: paletteOf(BASE.dark, 255, 0), light: paletteOf(BASE.light, 0, 255) }
+const PALETTES = { dark: paletteOf(BASE.dark, WHITE, BLACK), light: paletteOf(BASE.light, BLACK, WHITE) }
 /** How many colours stretches take in turn. */
 const HUES = BASE.dark.length
-/** `count`, or the next count when its colour would be that of the stretch holding it, counted at `parent`. */
+/** `count`, or the next count when `count` would give the colour of the stretch holding it, whose count is `parent`. */
 const hueAfter = (count: number, parent: number | undefined) => (parent !== undefined && count % HUES === parent % HUES ? count + 1 : count)
-/** The colours a count or a place picks, taken in turn. */
-const colourAt = <Colour,>(palette: readonly Colour[], n: number): Colour | undefined => palette[n % palette.length]
+/** The colours (a palette entry) a count or a place picks, taken in turn. */
+const colourAt = <Entry,>(palette: readonly Entry[], n: number): Entry | undefined => palette[n % HUES]
 
 // Every link the mod draws is answered by the mod: a click opens or closes,
 // and the link is never followed. A ctrl- or cmd-click opens it in a browser,
@@ -267,15 +269,19 @@ export const register: Register = (on, options) => {
         const now = storedLook(stored) ?? baseLook
         return { ...now, ...edit(now) }
       })
-    const startColour = isColour(baseLook.highlight) ? baseLook.highlight : (SWATCHES[0] ?? '')
+    const setHighlight = (highlight: Highlight) => () => change(() => ({ highlight }))
+    // One colour for every stretch: the one being tried, else the saved one, else the first swatch; the
+    // swatches then pick which.
+    const startColour = isColour(baseLook.highlight) ? baseLook.highlight : SWATCHES[0]
+    const pickColour = () => change(now => ({ highlight: isColour(now.highlight) ? now.highlight : startColour }))
     const toggle = (mark: Mark) => change(now => ({ marks: now.marks.includes(mark) ? now.marks.filter(m => m !== mark) : [...now.marks, mark] }))
     const { Box, Button, Text } = $.ui.resolve(e)
     const chosen = (isOn: boolean, label: string) => (isOn ? <Text bold>[{label}]</Text> : <Text>{label}</Text>)
     // While a save or a close holds the claim nothing is pressable: a press then would race it.
     const pressable = (key: string, onPress: () => unknown, label: RenderNode) =>
       holder !== null ? <Text key={key}>{label}</Text> : <Button plain key={key} onPress={onPress}>{label}</Button>
-    const swatch = (c: string) =>
-      pressable(`highlight-${c}`, () => change(() => ({ highlight: c })), <Text backgroundColor={c} {...contrastOn(c)}>{look.highlight === c ? '◆◆' : '  '}</Text>)
+    const swatch = (c: Hex) =>
+      pressable(`highlight-${c}`, setHighlight(c), <Text backgroundColor={c} {...contrastOn(c)}>{look.highlight === c ? '◆◆' : '  '}</Text>)
     const row = (label: string, parts: RenderNode[]) => (
       <Box key={`row-${label}`} flexWrap="wrap" columnGap={1}>
         <Text dimColor>{label.padEnd(9)}</Text>
@@ -300,10 +306,9 @@ export const register: Register = (on, options) => {
               ]),
         ])}
         {row('highlight', [
-          pressable('highlight-none', () => change(() => ({ highlight: '' })), chosen(look.highlight === '', 'no highlight')),
-          // One colour for every stretch, the saved one if there is one; the swatches then pick which.
-          pressable('highlight-colour', () => change(now => ({ highlight: isColour(now.highlight) ? now.highlight : startColour })), chosen(isColour(look.highlight), 'colour')),
-          pressable('highlight-tinted', () => change(() => ({ highlight: TINTED })), chosen(look.highlight === TINTED, 'tinted')),
+          pressable('highlight-none', setHighlight(''), chosen(look.highlight === '', 'no highlight')),
+          pressable('highlight-colour', pickColour, chosen(isColour(look.highlight), 'colour')),
+          pressable('highlight-tinted', setHighlight(TINTED), chosen(look.highlight === TINTED, 'tinted')),
           ...(isColour(look.highlight) ? SWATCHES.map(swatch) : []),
         ])}
       </Box>
@@ -432,7 +437,7 @@ export const register: Register = (on, options) => {
       ])
       const look = storedLook(picked) ?? baseLook
       const isTinted = look.highlight === TINTED
-      // The theme matters only once a stretch in this reply is drawn in its colour: open, or tinted.
+      // The theme matters only once a stretch in this reply is drawn in its colour: open, or with the tinted highlight.
       const isLight =
         (isTinted || Object.keys(order).length > 0) &&
         (await $.config.list().catch(() => [])).some(row => row.key === 'theme' && String(row.value).startsWith('light'))
@@ -440,6 +445,8 @@ export const register: Register = (on, options) => {
       const paragraphs = paragraphsOf(text).map((paragraph, i) => ({ ...paragraph, key: `paragraph-${i}`, member: `${e.requestId}#paragraph-${i}` }))
       const holding = paragraphs.filter(p => p.hasStretch)
       const places = isTinted ? placesOf(holding) : undefined
+      // The tinted highlight is each stretch's own, handed to the reply by key in place of the look's.
+      const drawnLook: DrawnLook = { ...look, highlight: isColour(look.highlight) ? look.highlight : '' }
       // The terminal says again whether a reply is on screen whenever a scroll changes it; null is off it.
       setNewest(drawnReplies, e.requestId, { text, isOnScreen: e.props.onScreen !== null, paragraphs: holding }, KEPT_DRAWN_REPLIES)
       const parts = await Promise.all(
@@ -449,17 +456,14 @@ export const register: Register = (on, options) => {
           const placed = places?.get(key)
           const tints = tintsOf(order, key, newest === e.requestId ? count - 1 : -1, palette, placed)
           const keys = Object.fromEntries((shown?.targets ?? []).filter(one => one.member === member).map(one => [one.key, one.letter]))
-          // In the tinted style each stretch's highlight is its own, handed over by key in place of the look's.
-          const highlights = placed && Object.fromEntries([...placed].map(([at, n]) => [at, colourAt(palette, n)?.highlight ?? '']))
           const props: ReplyProps = {
             text,
             open,
             tints,
             ask,
             letters: shown === null ? null : { action: shown.action, keys },
-            look: isTinted ? { ...look, highlight: '' } : look,
-            // As of Claude Code 2.1.302 a Client's props may hold no undefined value, so none is passed.
-            ...(highlights && { highlights }),
+            look: drawnLook,
+            highlights: placed === undefined ? {} : highlightsOf(placed, palette),
           }
           return <Client key={key} module="./reply.tsx" props={props} width="100%" />
         }),
@@ -515,7 +519,7 @@ export const register: Register = (on, options) => {
     if (opened !== undefined) await update($, seen, list => (list.includes(opened.short) ? list : [...list, opened.short]))
 
     // Each open stretch keeps the count it was opened at, across the reply's paragraphs, which picks
-    // its colour outside the tinted style; a nested one skips its parent's colour. The newest is the
+    // its colour outside the tinted highlight; a nested one skips its parent's colour. The newest is the
     // open stretch with the reply's last count.
     const here = `${e.element}#`
     await update($, memberOf(stretchOrder, { requestId: e.requestId }), ({ order, count }) => {
@@ -592,8 +596,8 @@ async function lettersFor($: EngineInterface, action: Action): Promise<{ letter:
 }
 
 /**
- * The tint of each open stretch in one paragraph: its colour by the count it was opened at, or in the
- * tinted style by its place, faded unless it was opened at `newest`.
+ * The tint of each open stretch in one paragraph: its colour by the count it was opened at, or under
+ * the tinted highlight by its place, faded unless it was opened at `newest`.
  */
 function tintsOf(
   order: Record<string, number>,
@@ -608,28 +612,49 @@ function tintsOf(
       .filter(([at]) => at.startsWith(here))
       .flatMap(([at, n]) => {
         const key = at.slice(here.length)
-        const colours = colourAt(palette, places?.get(key) ?? n)
+        // Under the tinted highlight a stretch with no place has no colour to keep, so none is made up.
+        const place = places === undefined ? n : places.get(key)
+        const colours = place === undefined ? undefined : colourAt(palette, place)
         return colours === undefined ? [] : [[key, { words: n === newest ? colours.soft : colours.faded, closer: colours.soft }]]
       }),
   )
 }
 
 /**
- * Each pressable stretch's place in a reply, by paragraph then key, which picks its colour in the
- * tinted style: counted in reading order across the reply's paragraphs, a nested stretch after the one
- * holding it and never in that one's colour, so a stretch has its colour before it is opened.
+ * Each pressable stretch's place in a reply, by paragraph then key, which picks its colour under the
+ * tinted highlight: counted in reading order across the reply's paragraphs, a nested stretch after the
+ * one holding it and never in that one's colour, so a stretch has its colour before it is opened.
  */
 function placesOf(paragraphs: { text: string; key: string }[]): Map<string, Map<string, number>> {
   let next = 0
   return new Map(
     paragraphs.map(({ text, key }) => {
       const places = new Map<string, number>()
-      for (const stretch of stretches(parse(text)).filter(isLinkable)) {
-        const place = hueAfter(next, places.get(parentOf(stretch.key)))
-        places.set(stretch.key, place)
-        next = place + 1
+      // The holding stretch is passed down the parse, not read back from a key, which a short form can spell like a nested one.
+      const walk = (segments: Segment[], holder: number | undefined) => {
+        for (const segment of segments) {
+          if (typeof segment === 'string') continue
+          let inside = holder
+          if (isLinkable(segment)) {
+            inside = hueAfter(next, holder)
+            places.set(segment.key, inside)
+            next = inside + 1
+          }
+          walk(segment.long ?? [], inside)
+        }
       }
+      walk(parse(text), undefined)
       return [key, places]
+    }),
+  )
+}
+
+/** Under the tinted highlight, each stretch's highlight in one paragraph, by key: its colour's deep form. */
+function highlightsOf(places: ReadonlyMap<string, number>, palette: readonly { highlight: Hex }[]): Record<string, Hex> {
+  return Object.fromEntries(
+    [...places].flatMap(([key, place]) => {
+      const colours = colourAt(palette, place)
+      return colours === undefined ? [] : [[key, colours.highlight]]
     }),
   )
 }

@@ -84,12 +84,12 @@ never lose your place.
 - **The marking is yours to pick.** Phrases you can open are underlined by default. In the
   terminal's fullscreen layout, run `/cc-stretch:style` and a toolbar above the prompt restyles
   every reply as you click: marks (`bold`, `italic`, `underline`, `strikethrough`, `dim`) and a
-  highlight, either one colour or `tinted`, which highlights each stretch in the colour the words it
-  adds are drawn in once you open it. Under a highlight, `dim` moves the text toward the
-  highlight. `save` keeps the style in two plugin settings, `marks` and `highlight`, which as of
-  Claude Code 2.1.302 `/plugin`'s Configure options also changes; `close` puts the toolbar away
-  and drops a style you tried but did not save. In the Claude desktop app, where cc-stretch draws
-  stretches as links, there is no toolbar.
+  highlight, either one hex colour or `tinted`, which highlights each closed stretch in the colour its
+  added words are drawn in once you open it, blended 75% into the background. Under a highlight,
+  `dim` moves the text toward the highlight. `save` keeps the style in two plugin settings, `marks`
+  and `highlight`, which as of Claude Code 2.1.302 `/plugin`'s Configure options also changes;
+  `close` puts the toolbar away and drops a style you tried but did not save. In the Claude desktop
+  app, where cc-stretch draws stretches as links, there is no toolbar.
 
 ## Limits
 

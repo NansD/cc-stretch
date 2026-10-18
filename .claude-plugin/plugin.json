@@ -13,7 +13,7 @@
     "highlight": {
       "type": "string",
       "title": "Closed stretch highlight",
-      "description": "Background of a phrase you can open: a hex colour such as #264f78, in any case, or the word tinted, which highlights each stretch in the colour its words take once open. Its text turns near black or near white, whichever reads better. Empty for none.",
+      "description": "Background of a phrase you can open: a hex colour such as #264f78, in any case, or the word tinted, which highlights each closed stretch in the colour its words take once open, blended 75% into the background. Its text turns near black or near white, whichever reads better. Empty, or anything else, for none.",
       "default": ""
     }
   }

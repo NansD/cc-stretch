@@ -4,8 +4,9 @@ import { grow, lengthOf } from './grow'
 import { continuationOf, isMarkup, layout, link, linkAt, targetsIn, tint, widthOf } from './layout'
 import type { Action, Row, Run } from './layout'
 import { closeAfter, isLinkable, KEY_SEPARATOR, parse } from './parse'
-import { DEFAULT_LOOK, lookProps } from './look'
-import type { Look } from './look'
+import { DEFAULT_LOOK, drawsHighlight, lookProps } from './look'
+import type { Hex } from './contrast'
+import type { DrawnLook } from './look'
 import type { Segment, Stretch } from './parse'
 
 // Draws one paragraph of a reply that holds stretches. It runs where the reader's screen draws it,
@@ -27,8 +28,8 @@ type Letters = { action: Action; keys: Record<string, string> }
 
 /**
  * The paragraph, the stretches the reader already has open in it, the tint of each, the last ask, its
- * letters, how pressable phrases look, and in the tinted style each stretch's own highlight, by key,
- * in place of the look's.
+ * letters, how pressable phrases look, and under the tinted highlight each stretch's own highlight, by
+ * key, in place of the look's.
  */
 export type ReplyProps = {
   text: string
@@ -36,8 +37,8 @@ export type ReplyProps = {
   tints: Record<string, Tint>
   ask: Ask | null
   letters: Letters | null
-  look?: Look
-  highlights?: Record<string, string>
+  look?: DrawnLook
+  highlights: Record<string, Hex>
 }
 
 /**
@@ -81,7 +82,8 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
     surface.every(FRAME_MS, () => tick(surface))
   }
   // As of Claude Code 2.1.302 a paragraph an older plugin version drew stays on screen after
-  // /reload-plugins, and this code is handed its old props, without the ask or the letters.
+  // /reload-plugins, and this code is handed its old props, without the ask, the letters, the look or
+  // the highlights.
   const ask = props.ask ?? null
   const letters = props.letters ?? null
   if (ask !== null) asks.set(surface, ask)
@@ -95,7 +97,7 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   const rows = state.selection === null ? lettering : selected(lettering, state.selection)
   const look = props.look ?? DEFAULT_LOOK
   const highlights = new Map(Object.entries(props.highlights ?? {}))
-  const lookFor = (run: DrawnRun): Look => {
+  const lookFor = (run: DrawnRun): DrawnLook => {
     const highlight = run.link && highlights.get(run.link.key)
     return highlight === undefined ? look : { ...look, highlight }
   }
@@ -342,12 +344,16 @@ function closed(open: string[], key: string): string[] {
   return open.filter(k => k !== key && !k.startsWith(`${key}${KEY_SEPARATOR}`))
 }
 
-function styleOf(run: DrawnRun, look: Look): TextProps {
+function styleOf(run: DrawnRun, look: DrawnLook): TextProps {
   // A phrase a press acts on carries the look: underlined in the text's own colour by default,
   // leaving colour to code, to the words a click added and to a hyperlink inside the phrase. A
-  // closer is tinted like those words. While a letter covers the phrase it stays underlined, whatever
-  // the look, and the letter's own colours stand alone.
-  const looked = run.link && !run.isLetter && !run.isAfterLetter ? lookProps(look, !run.tint && !run.code && run.href === undefined, run.dim) : undefined
+  // closer is tinted like those words.
+  const isPlainText = !run.tint && !run.code && run.href === undefined
+  // While a letter covers the phrase, the rest of it keeps a highlight drawn on it, so a tinted one
+  // still shows the colour the stretch opens in; any other part is drawn in inverse text on the
+  // permission colour, underlined whatever the look.
+  const isOnPermission = run.isAfterLetter && !drawsHighlight(look, isPlainText)
+  const looked = run.link && !run.isLetter && !isOnPermission ? lookProps(look, isPlainText, run.dim) : undefined
   return {
     ...(run.bold && { bold: true }),
     ...(run.italic && { italic: true }),
@@ -359,9 +365,8 @@ function styleOf(run: DrawnRun, look: Look): TextProps {
     ...(run.link && (looked ?? { underline: true })),
     // A hyperlink is underlined in the suggestion colour, so it is not read as a stretch to press.
     ...(run.href !== undefined && { underline: true, color: 'suggestion' }),
-    // A letter is drawn bold on the theme's error colour, and the rest of its short form or « on its
-    // permission colour, both in inverse text.
-    ...(run.isAfterLetter && { color: 'inverseText', backgroundColor: 'permission' }),
+    ...(isOnPermission && { color: 'inverseText', backgroundColor: 'permission' }),
+    // A letter is drawn bold in inverse text on the theme's error colour.
     ...(run.isLetter && { color: 'inverseText', backgroundColor: 'error', bold: true }),
     // Text the reader dragged across is drawn inverse, as a terminal draws its own selection.
     ...(run.isSelected && { inverse: true }),

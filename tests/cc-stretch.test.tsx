@@ -24,6 +24,9 @@ const FULLSCREEN = { columns: 100, rows: 40, isFullscreen: true }
 const MAIN_SCREEN = { columns: 100, rows: 40, isFullscreen: false }
 const HREF = 'https://cc-stretch.invalid/'
 const FIRST = 'paragraph-0'
+// The dark theme's colours for a closed stretch's tinted highlight, and for the words it adds once open, by place.
+const DEEP = ['#403002', '#2c2240', '#122623', '#361e16'] as const
+const SOFT = ['#ffdd77', '#d3bdff', '#9ac5c0', '#e9b4a3'] as const
 const COMPOSE = {
   model: 'claude-opus-5-5',
   promptModel: 'claude-opus-5-5',
@@ -1031,6 +1034,28 @@ describe('keyboard', () => {
     await ui.unmount()
   })
 
+  for (const [highlight, shown] of [['#264f78', '#264f78'], ['tinted', DEEP[0]]] as const) {
+    test(`with the highlight ${highlight}, the rest of a short form under its letter keeps that highlight`, { options: { highlight } }, async ($, on) => {
+      engine(on)
+      const ui = await mountReply($, FULLSCREEN)
+      await down(ui)
+      expect(await letters(ui)).toEqual(['a'])
+      expect(await phraseProps(ui, 'n a stale cache')).toMatchObject({ backgroundColor: shown, color: '#f2f2f2' })
+      expect((await ui.findAll({ type: 'Text', in: FIRST })).some(piece => piece.props.backgroundColor === 'permission')).toBe(false)
+      await ui.unmount()
+    })
+  }
+
+  test('under a highlight, code in a short form under its letter, which takes no highlight, is drawn on the permission colour', { options: { highlight: '#264f78' } }, async ($, on) => {
+    const text = 'See {{the `cfg` file|the `cfg` file, in ci}} now.'
+    engine(on, [text])
+    const ui = await mountReply($, FULLSCREEN, text)
+    await down(ui)
+    expect(await phraseProps(ui, 'cfg')).toMatchObject({ backgroundColor: 'permission' })
+    expect(await phraseProps(ui, ' file')).toMatchObject({ backgroundColor: '#264f78' })
+    await ui.unmount()
+  })
+
   test('the close-letters Button draws a letter over the « of each open stretch, and typing it closes the stretch', async ($, on) => {
     engine(on)
     const ui = await mountReply($, FULLSCREEN)
@@ -1254,7 +1279,7 @@ describe('tool calls', () => {
   })
 })
 
-/** The props of the first pressable phrase of the first paragraph. */
+/** The props of a pressable phrase, by its text and paragraph; by default the first phrase of the first paragraph. */
 const phraseProps = async (ui: Mounted, phrase = 'on a stale cache', key = FIRST) => (await ui.findAll({ type: 'Text', in: key })).find(piece => piece.text === phrase)?.props
 
 describe('style', () => {
@@ -1278,7 +1303,7 @@ describe('style', () => {
     await ui.unmount()
   })
 
-  test('italic and strikethrough combine with a highlight',{ options: { marks: 'italic,strikethrough', highlight: '#264f78' } }, async $ => {
+  test('italic and strikethrough combine with a highlight', { options: { marks: 'italic,strikethrough', highlight: '#264f78' } }, async $ => {
     const ui = await mountReply($, FULLSCREEN)
     const phrase = await phraseProps(ui)
     expect(phrase).toMatchObject({ italic: true, strikethrough: true, backgroundColor: '#264f78' })
@@ -1302,11 +1327,11 @@ describe('style', () => {
     await ui.unmount()
   })
 
-  test('dim on a highlight named by theme colour, with no text colour chosen for it, is the theme grey', { options: { marks: 'dim', highlight: 'suggestion' } }, async $ => {
+  test('a highlight that is neither hex nor tinted is none, so dim is the theme grey', { options: { marks: 'dim', highlight: 'suggestion' } }, async $ => {
     const ui = await mountReply($, FULLSCREEN)
     const phrase = await phraseProps(ui)
-    expect(phrase).toMatchObject({ backgroundColor: 'suggestion', dimColor: true })
-    expect(phrase).not.toHaveProperty('color')
+    expect(phrase).toMatchObject({ dimColor: true })
+    expect(phrase).not.toHaveProperty('backgroundColor')
     await ui.unmount()
   })
 
@@ -1338,9 +1363,6 @@ describe('style', () => {
   }
 
   describe('the tinted highlight', () => {
-    // The dark theme's colours for a closed stretch's highlight, and for the words it adds once open, by place.
-    const DEEP = ['#594402', '#3d2f59', '#193531', '#4b2a1e']
-    const SOFT = ['#ffdd77', '#d3bdff', '#9ac5c0', '#e9b4a3']
     const backgroundOf = async (ui: Mounted, phrase: string, key = FIRST) => (await phraseProps(ui, phrase, key))?.backgroundColor
 
     test('highlights each closed stretch in the colour of its place, counted across the reply', { options: { highlight: ' Tinted ' } }, async $ => {
@@ -1370,6 +1392,23 @@ describe('style', () => {
       expect(await backgroundOf(ui, 'd')).toBe(DEEP[1])
       await ui.unmount()
     })
+
+    test('a nested stretch whose short form is spelled like a nested key still never takes its holder\'s colour', { options: { highlight: 'tinted' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, '{{p|p {{a|a1}} {{b|b1}} {{c|c1}} {{x › y|d1}}}} end.')
+      await pressOn(ui, 'p')
+      await ui.advance(2000)
+      expect(await backgroundOf(ui, 'x › y')).toBe(DEEP[1])
+      await ui.unmount()
+    })
+
+    test('on the light theme each closed stretch is highlighted pale, its text dark', { options: { highlight: 'tinted' } }, async ($, on) => {
+      const theme = { key: 'theme', label: 'Theme', kind: 'choice', value: 'light', provider: { plugin: 'engine', tier: 'core' }, isLocked: false } as const
+      on('config.list', () => ({ value: [theme] }))
+      const ui = await mountReply($, FULLSCREEN, 'A {{one|one more}} and {{two|two more}}.')
+      expect(await phraseProps(ui, 'one')).toMatchObject({ backgroundColor: '#e5dac7', color: '#1c1c1c' })
+      expect(await backgroundOf(ui, 'two')).toBe('#e1bfff')
+      await ui.unmount()
+    })
   })
 
   test('lookOf reads marks in any case, with commas or spaces, in toolbar order', () => {
@@ -1377,6 +1416,7 @@ describe('style', () => {
     expect(lookOf({ marks: 'italic bold' }).marks).toEqual(['bold', 'italic'])
     expect(lookOf({ marks: ' NONE ', highlight: '#264f78' })).toEqual({ marks: [], highlight: '#264f78' })
     expect(lookOf({ highlight: ' TINTED ' }).highlight).toBe('tinted')
+    for (const unknown of ['none', 'tint', '#zzz', '#264f78ff', 'suggestion']) expect(lookOf({ highlight: unknown }).highlight).toBe('')
     for (const typo of ['undrline', 'inverse', 42, ' ']) expect(lookOf({ marks: typo })).toEqual(DEFAULT_LOOK)
   })
 
@@ -1482,7 +1522,7 @@ describe('the style toolbar', () => {
     await toolbar.unmount()
   })
 
-  test('the toolbar offers five marks and three kinds of highlight, and no text colour', async ($, on) => {
+  test('the toolbar offers five marks and three highlight choices, and no text colour', async ($, on) => {
     terminal(on)
     const { toolbar } = await showToolbar($)
     const keys = await keysOf(toolbar)
@@ -1558,7 +1598,7 @@ describe('the style toolbar', () => {
     await toolbar.press({ key: 'highlight-colour' })
     await toolbar.press({ key: 'save' })
     expect(written).toEqual([['cc-stretch.marks', 'none'], ['cc-stretch.highlight', '#264f78']])
-    // The try is gone once saved; what shows is the style the settings now hold.
+    // The try is gone once saved, so nothing is left to save.
     expect(await keysOf(toolbar)).not.toContain('save')
     await toolbar.unmount()
   })
@@ -1631,7 +1671,9 @@ describe('the style toolbar', () => {
     await toolbar.press({ key: 'save' })
     expect(written).toEqual([['cc-stretch.highlight', '#264f78']])
     await toolbar.press({ key: 'mark-bold' })
-    // As of Claude Code 2.1.302 `claude plugin test` does not load the plugin again with the saved settings, so the try starts from none.
+    // As of Claude Code 2.1.302 `claude plugin test` does not load the plugin again with the saved settings,
+    // so after the save the toolbar shows the style it loaded with, which has no highlight, and colour must
+    // be pressed again before a swatch shows.
     await toolbar.press({ key: 'highlight-colour' })
     await toolbar.press({ key: 'highlight-#1f3a5f' })
     await toolbar.press({ key: 'save' })

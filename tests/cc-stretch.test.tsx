@@ -3,6 +3,8 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 
 import { grow } from '../hooks/grow'
+import { contrastOn } from '../hooks/contrast'
+import { DEFAULT_LOOK, lookOf, marksSetting } from '../hooks/look'
 import { layout, link, linkAt, tint, widthOf } from '../hooks/layout'
 import { closeAfter, hideLongForms, newStreamState, paragraphsOf, parse, stretches } from '../hooks/parse'
 import Reply from '../hooks/reply'
@@ -22,6 +24,9 @@ const FULLSCREEN = { columns: 100, rows: 40, isFullscreen: true }
 const MAIN_SCREEN = { columns: 100, rows: 40, isFullscreen: false }
 const HREF = 'https://cc-stretch.invalid/'
 const FIRST = 'paragraph-0'
+// The dark theme's colours for a closed stretch's tinted highlight, and for the words it adds once open, by place.
+const DEEP = ['#403002', '#2c2240', '#122623', '#361e16'] as const
+const SOFT = ['#ffdd77', '#d3bdff', '#9ac5c0', '#e9b4a3'] as const
 const COMPOSE = {
   model: 'claude-opus-5-5',
   promptModel: 'claude-opus-5-5',
@@ -159,6 +164,133 @@ describe('streaming', () => {
     expect((await flush('m2', 1, 'Maybe or List,}} with two operations.', true)).displayContent).toBeUndefined()
   })
 
+  // As of Claude Code 2.1.302 a reload, such as the one each saved setting causes, loads the hooks module
+  // afresh; plugin state outlives it, so a reply streaming across it keeps its filter.
+  test('a message\'s filter state is held in plugin state between its flushes, until its last or another message begins', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const written: unknown[] = []
+    on('state.set', { plugin: 'cc-stretch', key: 'streams' }, (_, e, next) => {
+      written.push(e.value)
+      return next(e)
+    })
+    const flush = (message: string, index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: message, index, final, delta })
+    await flush('m1', 0, 'A monad is {{a wrapper|a wrapper, like\n')
+    expect(written.at(-1)).toEqual({ m1: { open: [{ isLong: true }] } })
+    await flush('m2', 0, 'A monad is {{a wrapper|a wrapper, like\n')
+    expect(written.at(-1)).toEqual({ m2: { open: [{ isLong: true }] } })
+    await flush('m2', 1, 'Maybe or List,}} with two operations.', true)
+    expect(written.at(-1)).toEqual({})
+  })
+
+  test('flushes of one message that run at once are filtered in order', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const flush = (index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
+    const shown = await Promise.all([flush(0, 'Intro.\n'), flush(1, 'A monad is {{a wrapper|a wrapper, like\n'), flush(2, 'Maybe or List,}} with two operations.', true)])
+    expect(shown.map(flush => flush.displayContent)).toEqual(['Intro.\n', 'A monad is a wrapper\n', ' with two operations.'])
+  })
+
+  test('a message that begins leaves a finished one the state its last flush, still on its way, needs', async ($, on) => {
+    let release = () => {}
+    const held = new Promise<void>(resolve => (release = resolve))
+    on('classic.MessageDisplay', async (_, e) => {
+      if (e.message_id === 'a' && e.final) await held
+      return {}
+    })
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const flush = (message: string, index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: message, index, final, delta })
+    await flush('a', 0, 'A monad is {{a wrapper|a wrapper, like\n')
+    const last = flush('a', 1, 'Maybe or List,}} with two operations.', true)
+    await flush('b', 0, 'Next.\n')
+    release()
+    expect((await last).displayContent).toBe(' with two operations.')
+  })
+
+  // As of Claude Code 2.1.302 the test kit cannot reload a plugin, so the reload is stood in for by the
+  // state the last flush before it left, answered to the plugin's own read.
+  test('a message first seen midway continues from the state its last flush left, and is found once finished', async ($, on) => {
+    on('classic.MessageDisplay', () => ({}))
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
+    const raw = 'A monad is {{a wrapper|a wrapper, like\nMaybe or List,}} with two operations.\n'
+    let hasLanded = false
+    let searches = 0
+    on('session.messages', () => {
+      searches++
+      return { value: hasLanded ? [{ role: 'assistant' as const, text: raw, toolUses: [] }] : [] }
+    })
+    let isLeft = true
+    on('state.get', (_, e, next) => (isLeft && e.plugin === 'cc-stretch' && e.key === 'streams' ? { value: { value: { m: { open: [{ isLong: true }] } }, version: 0 } } : next(e)))
+    on('state.set', { plugin: 'cc-stretch', key: 'streams' }, (_, e, next) => {
+      isLeft = false
+      return next(e)
+    })
+    const earlier = await mountReply($, FULLSCREEN, 'A plain reply drawn before.', 'terminal', 'reply-0')
+    await earlier.unmount()
+    const middle = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 1, final: false, delta: 'Maybe or List,}} with two operations.\n' })
+    expect(middle.displayContent).toBe(' with two operations.\n')
+    hasLanded = true
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 2, final: true, delta: '' })
+    const ui = await mountReply($, FULLSCREEN, 'A monad is a wrapper\n with two operations.\n')
+    expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === 'a wrapper')?.props).toMatchObject({ underline: true })
+    await ui.unmount()
+    expect(searches).toBe(2)
+  })
+
+  // As of Claude Code 2.1.302 a flush that fails beneath shows its delta as written.
+  test('a reply whose final flush failed is found among the session\'s messages when drawn', async ($, on) => {
+    on('classic.MessageDisplay', (_, e) => {
+      if (e.final) throw new Error('a hook beneath failed')
+      return {}
+    })
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
+    const raw = 'A monad is {{a wrapper|a wrapper, like Maybe or List}}.\nDone.'
+    let hasLanded = false
+    on('session.messages', () => ({ value: hasLanded ? [{ role: 'assistant' as const, text: raw, toolUses: [] }] : [] }))
+    const earlier = await mountReply($, FULLSCREEN, 'A plain reply drawn before.', 'terminal', 'reply-0')
+    await earlier.unmount()
+    const first = await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 0, final: false, delta: 'A monad is {{a wrapper|a wrapper, like Maybe or List}}.\n' })
+    expect(first.displayContent).toBe('A monad is a wrapper.\n')
+    await $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index: 1, final: true, delta: 'Done.' }).catch(() => undefined)
+    hasLanded = true
+    const ui = await mountReply($, FULLSCREEN, 'A monad is a wrapper.\nDone.')
+    expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === 'a wrapper')?.props).toMatchObject({ underline: true })
+    await ui.unmount()
+  })
+
+  test('the hooks beneath see each flush at once, and the flushes are still filtered in order', async ($, on) => {
+    const called: number[] = []
+    const releases = new Map<number, () => void>()
+    let allCalled = () => {}
+    const reached = new Promise<void>(resolve => (allCalled = resolve))
+    on('classic.MessageDisplay', async (_, e) => {
+      called.push(e.index)
+      if (called.length === 3) allCalled()
+      await new Promise<void>(resolve => releases.set(e.index, resolve))
+      return {}
+    })
+    on('session.surfaces', () => ({ value: ['terminal'] }))
+    const flush = (index: number, delta: string, final = false) =>
+      $.classic.MessageDisplay({ turn_id: 't', message_id: 'm', index, final, delta })
+    const all = Promise.all([flush(0, 'A monad is {{a wrapper|a wrapper, like\n'), flush(1, 'Maybe or List,}} with two.\n'), flush(2, 'End.', true)])
+    // Held one at a time, the hooks beneath would see only the first flush, and this would never resolve.
+    await reached
+    expect(called).toEqual([0, 1, 2])
+    for (const index of [2, 1, 0]) releases.get(index)?.()
+    expect((await all).map(shown => shown.displayContent)).toEqual(['A monad is a wrapper\n', ' with two.\n', 'End.'])
+  })
+
   // Claude Code 2.1.299 and 2.1.300 hand the AssistantMessage site the display text the filter left.
   test('a reply the filter drew short is drawn from its markup, pressable', async ($, on) => {
     on('classic.MessageDisplay', () => ({}))
@@ -185,6 +317,28 @@ describe('streaming', () => {
     expect(await textIn(ui)).toBe('The build fails on a stale cache.\nBraces in code stay: {{a|b}}.')
     expect(await textIn(ui, 'paragraph-1')).toBe('The fix is one line.')
     await ui.unmount()
+  })
+
+  test('a reply filtered before the plugin loaded is found however far back, and the session is read once', async ($, on) => {
+    const replies = Array.from({ length: 52 }, (_, i) => `Reply ${i}: {{short ${i}|long detail ${i}}}.`)
+    let searches = 0
+    on('session.messages', () => {
+      searches++
+      return { value: replies.map(text => ({ role: 'assistant' as const, text, toolUses: [] })) }
+    })
+    on('ui.render', { component: 'AssistantMessage' }, ($, e) => {
+      const { Text } = $.ui.resolve(e)
+      return <Text>engine</Text>
+    })
+    for (const [i, reply] of replies.slice(0, 2).entries()) {
+      const ui = await mountReply($, FULLSCREEN, hideLongForms(reply, newStreamState()))
+      expect((await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === `short ${i}`)?.props).toMatchObject({ underline: true })
+      await ui.unmount()
+    }
+    const unknown = await mountReply($, FULLSCREEN, 'A reply no message holds.')
+    expect(await unknown.find({ text: 'engine' })).toBeDefined()
+    await unknown.unmount()
+    expect(searches).toBe(1)
   })
 
   test('a filtered reply that held no stretch is drawn by the engine, without a search', async ($, on) => {
@@ -349,6 +503,29 @@ describe('paragraphs', () => {
     const text = ['```', '```python', '', '{{a|b}}', '```', 'After.'].join('\n')
     expect(paragraphsOf(text)).toEqual([{ text, hasStretch: false }])
   })
+})
+
+test('marks dim draws a pressable phrase dim instead of underlined', { options: { marks: 'dim' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  expect(pieces.find(piece => piece.text === 'on a stale cache')?.props).toMatchObject({ dimColor: true })
+  expect(pieces.find(piece => piece.text === 'on a stale cache')?.props).not.toHaveProperty('underline')
+  await pressOn(ui, 'on a stale cache')
+  await ui.advance(2000)
+  expect(await textIn(ui)).toContain('because the cache key hashes only package.json')
+  await ui.unmount()
+})
+
+test('marks none leaves a pressable phrase unmarked but still pressable', { options: { marks: 'none' } }, async $ => {
+  const ui = await mountReply($, FULLSCREEN)
+  const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+  const phrase = pieces.find(piece => piece.text === 'on a stale cache')?.props
+  expect(phrase).not.toHaveProperty('underline')
+  expect(phrase).not.toHaveProperty('dimColor')
+  await pressOn(ui, 'on a stale cache')
+  await ui.advance(2000)
+  expect(await textIn(ui)).toContain('because the cache key hashes only package.json')
+  await ui.unmount()
 })
 
 test('a press grows a stretch in place, nested ones too, and « shrinks it back', async $ => {
@@ -847,6 +1024,38 @@ describe('keyboard', () => {
     await ui.unmount()
   })
 
+  test('with no style set, a short form under letters stays underlined', async ($, on) => {
+    engine(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await down(ui)
+    const lettered = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => ['error', 'permission'].includes(String(piece.props.backgroundColor)))
+    expect(lettered.map(piece => piece.text)).toEqual(['a', 'n a stale cache'])
+    for (const piece of lettered) expect(piece.props).toMatchObject({ underline: true })
+    await ui.unmount()
+  })
+
+  for (const [highlight, shown] of [['#264f78', '#264f78'], ['tinted', DEEP[0]]] as const) {
+    test(`with the highlight ${highlight}, the rest of a short form under its letter keeps that highlight`, { options: { highlight } }, async ($, on) => {
+      engine(on)
+      const ui = await mountReply($, FULLSCREEN)
+      await down(ui)
+      expect(await letters(ui)).toEqual(['a'])
+      expect(await phraseProps(ui, 'n a stale cache')).toMatchObject({ backgroundColor: shown, color: '#f2f2f2' })
+      expect((await ui.findAll({ type: 'Text', in: FIRST })).some(piece => piece.props.backgroundColor === 'permission')).toBe(false)
+      await ui.unmount()
+    })
+  }
+
+  test('under a highlight, code in a short form under its letter, which takes no highlight, is drawn on the permission colour', { options: { highlight: '#264f78' } }, async ($, on) => {
+    const text = 'See {{the `cfg` file|the `cfg` file, in ci}} now.'
+    engine(on, [text])
+    const ui = await mountReply($, FULLSCREEN, text)
+    await down(ui)
+    expect(await phraseProps(ui, 'cfg')).toMatchObject({ backgroundColor: 'permission' })
+    expect(await phraseProps(ui, ' file')).toMatchObject({ backgroundColor: '#264f78' })
+    await ui.unmount()
+  })
+
   test('the close-letters Button draws a letter over the « of each open stretch, and typing it closes the stretch', async ($, on) => {
     engine(on)
     const ui = await mountReply($, FULLSCREEN)
@@ -1067,5 +1276,454 @@ describe('tool calls', () => {
       expect(await ui.find({ key: 'tools' })).toBeUndefined()
       await ui.unmount()
     }
+  })
+})
+
+/** The props of a pressable phrase, by its text and paragraph; by default the first phrase of the first paragraph. */
+const phraseProps = async (ui: Mounted, phrase = 'on a stale cache', key = FIRST) => (await ui.findAll({ type: 'Text', in: key })).find(piece => piece.text === phrase)?.props
+
+describe('style', () => {
+  test('with no options, a pressable phrase is underlined and nothing else', async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ underline: true })
+    for (const prop of ['bold', 'italic', 'color', 'backgroundColor', 'dimColor', 'inverse', 'strikethrough']) expect(phrase).not.toHaveProperty(prop)
+    await ui.unmount()
+  })
+
+  test('a highlight alone keeps the default underline, its text turned light on a deep colour', { options: { highlight: '#264f78' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    expect(await phraseProps(ui)).toMatchObject({ underline: true, backgroundColor: '#264f78', color: '#f2f2f2' })
+    await ui.unmount()
+  })
+
+  test('a light highlight from the settings turns the phrase text dark', { options: { highlight: '#ffd75f' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    expect(await phraseProps(ui)).toMatchObject({ backgroundColor: '#ffd75f', color: '#1c1c1c' })
+    await ui.unmount()
+  })
+
+  test('italic and strikethrough combine with a highlight', { options: { marks: 'italic,strikethrough', highlight: '#264f78' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ italic: true, strikethrough: true, backgroundColor: '#264f78' })
+    expect(phrase).not.toHaveProperty('underline')
+    await ui.unmount()
+  })
+
+  test('marks none leaves a highlighted phrase only its highlight', { options: { marks: 'none', highlight: '#264f78' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ backgroundColor: '#264f78', color: '#f2f2f2' })
+    expect(phrase).not.toHaveProperty('underline')
+    await ui.unmount()
+  })
+
+  test('dim on a highlight moves the text colour chosen to read on it toward the highlight', { options: { marks: 'dim', highlight: '#264f78' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ backgroundColor: '#264f78', color: '#a0b1c1' })
+    expect(phrase).not.toHaveProperty('dimColor')
+    await ui.unmount()
+  })
+
+  test('a highlight that is neither hex nor tinted is none, so dim is the theme grey', { options: { marks: 'dim', highlight: 'suggestion' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ dimColor: true })
+    expect(phrase).not.toHaveProperty('backgroundColor')
+    await ui.unmount()
+  })
+
+  test('an opened stretch keeps its tint under a style with dim and a highlight', { options: { marks: 'bold,dim', highlight: '#264f78' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    await pressOn(ui, 'on a stale cache')
+    await ui.advance(2000)
+    const closer = (await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === '«')?.props
+    expect(closer?.color).toMatch(/^#/)
+    expect(closer).not.toHaveProperty('backgroundColor')
+    expect(closer).not.toHaveProperty('dimColor')
+    expect(closer).toMatchObject({ bold: true })
+    await ui.unmount()
+  })
+
+  for (const highlight of ['#264f78', '']) {
+    const name = highlight === '' ? 'stays dim with no highlight' : 'takes the highlight, its text colour moved toward it as dim'
+    test(`the target written after a relative link in a short form ${name}`, { options: { highlight } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, 'Read {{the [guide](docs/guide.md)|the [guide](docs/guide.md) first}} now.')
+      const target = (await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === ' (docs/guide.md)')?.props
+      if (highlight === '') {
+        expect(target).toMatchObject({ dimColor: true })
+      } else {
+        expect(target).toMatchObject({ backgroundColor: highlight, color: '#a0b1c1' })
+        expect(target).not.toHaveProperty('dimColor')
+      }
+      await ui.unmount()
+    })
+  }
+
+  describe('the tinted highlight', () => {
+    const backgroundOf = async (ui: Mounted, phrase: string, key = FIRST) => (await phraseProps(ui, phrase, key))?.backgroundColor
+
+    test('highlights each closed stretch in the colour of its place, counted across the reply', { options: { highlight: ' Tinted ' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, 'A {{one|one more}} and {{two|two more}}.\n\nThen {{three|three more}}.')
+      expect(await backgroundOf(ui, 'one')).toBe(DEEP[0])
+      expect(await backgroundOf(ui, 'two')).toBe(DEEP[1])
+      expect(await backgroundOf(ui, 'three', 'paragraph-1')).toBe(DEEP[2])
+      expect(await phraseProps(ui, 'one')).toMatchObject({ underline: true, color: '#f2f2f2' })
+      await ui.unmount()
+    })
+
+    test('an opened stretch takes the colour of its place, not of the order it was opened in', { options: { highlight: 'tinted' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, 'A {{one|one more}} and {{two|two more}}.')
+      await pressOn(ui, 'two')
+      await ui.advance(2000)
+      const added = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => piece.text.trim() === 'more')
+      expect(added.map(piece => piece.props.color)).toEqual([SOFT[1]])
+      expect(await backgroundOf(ui, 'one')).toBe(DEEP[0])
+      await ui.unmount()
+    })
+
+    test('a nested stretch never takes the colour of the stretch holding it', { options: { highlight: 'tinted' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, '{{p|p {{a|a1}} {{b|b1}} {{c|c1}} {{d|d1}}}} end.')
+      await pressOn(ui, 'p')
+      await ui.advance(2000)
+      expect(await backgroundOf(ui, 'c')).toBe(DEEP[3])
+      expect(await backgroundOf(ui, 'd')).toBe(DEEP[1])
+      await ui.unmount()
+    })
+
+    test('a nested stretch whose short form is spelled like a nested key still never takes its holder\'s colour', { options: { highlight: 'tinted' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, '{{p|p {{a|a1}} {{b|b1}} {{c|c1}} {{x › y|d1}}}} end.')
+      await pressOn(ui, 'p')
+      await ui.advance(2000)
+      expect(await backgroundOf(ui, 'x › y')).toBe(DEEP[1])
+      await ui.unmount()
+    })
+
+    test('on the light theme each closed stretch is highlighted pale, its text dark', { options: { highlight: 'tinted' } }, async ($, on) => {
+      const theme = { key: 'theme', label: 'Theme', kind: 'choice', value: 'light', provider: { plugin: 'engine', tier: 'core' }, isLocked: false } as const
+      on('config.list', () => ({ value: [theme] }))
+      const ui = await mountReply($, FULLSCREEN, 'A {{one|one more}} and {{two|two more}}.')
+      expect(await phraseProps(ui, 'one')).toMatchObject({ backgroundColor: '#e5dac7', color: '#1c1c1c' })
+      expect(await backgroundOf(ui, 'two')).toBe('#e1bfff')
+      await ui.unmount()
+    })
+  })
+
+  test('lookOf reads marks in any case, with commas or spaces, in toolbar order', () => {
+    expect(lookOf({ marks: 'Underline , BOLD' }).marks).toEqual(['bold', 'underline'])
+    expect(lookOf({ marks: 'italic bold' }).marks).toEqual(['bold', 'italic'])
+    expect(lookOf({ marks: ' NONE ', highlight: '#264f78' })).toEqual({ marks: [], highlight: '#264f78' })
+    expect(lookOf({ highlight: ' TINTED ' }).highlight).toBe('tinted')
+    for (const unknown of ['none', 'tint', '#zzz', '#264f78ff', 'suggestion']) expect(lookOf({ highlight: unknown }).highlight).toBe('')
+    for (const typo of ['undrline', 'inverse', 42, ' ']) expect(lookOf({ marks: typo })).toEqual(DEFAULT_LOOK)
+  })
+
+  test('a style with no marks is saved as none, which reads back as no marks', () => {
+    expect(marksSetting([])).toBe('none')
+    expect(lookOf({ marks: marksSetting([]) }).marks).toEqual([])
+    expect(lookOf({ marks: marksSetting(['bold', 'underline']) }).marks).toEqual(['bold', 'underline'])
+  })
+
+  test('under dim, a link inside a short form keeps its colour while the words around it dim', { options: { marks: 'dim' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN, 'See {{the docs at https://x.invalid/d|the docs at https://x.invalid/d, with examples}} now.')
+    const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+    const url = pieces.find(piece => piece.text === 'https://x.invalid/d')?.props
+    expect(url).toMatchObject({ color: 'suggestion', underline: true })
+    expect(url).not.toHaveProperty('dimColor')
+    expect(pieces.find(piece => piece.text === 'the docs at ')?.props).toMatchObject({ dimColor: true })
+    await ui.unmount()
+  })
+
+  test('contrastOn picks the stronger of dark and light text, moves it 40% toward the highlight under dim, and leaves non-hex colours alone', () => {
+    expect(contrastOn('#264f78', true)).toEqual({ color: '#a0b1c1' })
+    expect(contrastOn('#ffd75f', true)).toEqual({ color: '#776737' })
+    expect(contrastOn('#ffd75f')).toEqual({ color: '#1c1c1c' })
+    expect(contrastOn('#264f78')).toEqual({ color: '#f2f2f2' })
+    expect(contrastOn('#fff')).toEqual({ color: '#1c1c1c' })
+    expect(contrastOn('#808080')).toEqual({ color: '#1c1c1c' })
+    for (const colour of ['suggestion', '', '#GGGGGG', 'rgb(0,0,0)']) expect(contrastOn(colour)).toEqual({})
+  })
+})
+
+describe('the style toolbar', () => {
+  /** A session with the terminal attached, where the toolbar is drawn. */
+  const terminal = (on: On) => on('session.surfaces', () => ({ value: ['terminal'] }))
+  /** /cc-stretch:style typed at the prompt, in fullscreen or on the main screen. */
+  const runStyle = ($: Engine, isFullscreen = true) =>
+    $.command.run({ command: 'cc-stretch:style', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen, columns: 100 } })
+  const mountToolbar = ($: Engine) =>
+    $.ui.mount({
+      plugin: 'cc-stretch',
+      surface: 'terminal',
+      component: 'AbovePrompt',
+      props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 100, scroll: { offset: 0, bodyRows: 30 }, view: {} },
+      viewport: FULLSCREEN,
+    })
+  const showToolbar = async ($: Engine) => ({ answer: await runStyle($), toolbar: await mountToolbar($) })
+  const keysOf = async (toolbar: Awaited<ReturnType<typeof mountToolbar>>) => (await toolbar.findAll({ type: 'Button' })).map(button => String(button.key))
+  /** What the toolbar writes to the settings, each write answered as made. */
+  const recordWrites = (on: On) => {
+    const written: [string, unknown][] = []
+    on('config.set', (_, e) => {
+      written.push([e.key, e.value])
+      return { value: e.value }
+    })
+    return written
+  }
+  /** What the toolbar toasts. */
+  const toasts = (on: On) => {
+    const said: string[] = []
+    on('ui.toast', (_, e) => {
+      said.push(e.text)
+      return { value: undefined }
+    })
+    return said
+  }
+
+  test('/cc-stretch:style shows the toolbar, and running it again leaves it shown', async ($, on) => {
+    terminal(on)
+    const { answer, toolbar } = await showToolbar($)
+    expect(answer.text).toContain('shown')
+    await runStyle($)
+    expect((await keysOf(toolbar)).length).toBeGreaterThan(0)
+    await toolbar.unmount()
+  })
+
+  test('on the main screen the command says why, and shows no toolbar', async ($, on) => {
+    terminal(on)
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
+    const answer = await runStyle($, false)
+    expect(answer.text).toContain('run /tui fullscreen')
+    expect(answer.text).toContain('CLAUDE_CODE_NO_FLICKER=1')
+    const toolbar = await mountToolbar($)
+    expect(await keysOf(toolbar)).toEqual([])
+    await toolbar.unmount()
+  })
+
+  test('with no terminal attached the command says the toolbar is drawn there, and shows none', async ($, on) => {
+    on('session.surfaces', () => ({ value: ['desktop'] }))
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
+    const answer = await runStyle($)
+    expect(answer.text).toContain('drawn in the terminal')
+    const toolbar = await mountToolbar($)
+    expect(await keysOf(toolbar)).toEqual([])
+    await toolbar.unmount()
+  })
+
+  test('a stored try with no highlight is no try, so there is nothing to reset or save', async ($, on) => {
+    terminal(on)
+    on('state.get', (_, e, next) => (e.plugin === 'cc-stretch' && e.key === 'look' ? { value: { value: { marks: ['bold'] }, version: 0 } } : next(e)))
+    const { toolbar } = await showToolbar($)
+    const keys = await keysOf(toolbar)
+    expect(keys).not.toContain('save')
+    expect(keys).not.toContain('reset')
+    await toolbar.unmount()
+  })
+
+  test('the toolbar offers five marks and three highlight choices, and no text colour', async ($, on) => {
+    terminal(on)
+    const { toolbar } = await showToolbar($)
+    const keys = await keysOf(toolbar)
+    expect(keys.filter(key => key.startsWith('mark-'))).toEqual(['mark-bold', 'mark-italic', 'mark-underline', 'mark-strikethrough', 'mark-dim'])
+    expect(keys.filter(key => key.startsWith('highlight-'))).toEqual(['highlight-none', 'highlight-colour', 'highlight-tinted'])
+    expect(keys.some(key => key.startsWith('text-'))).toBe(false)
+    await toolbar.unmount()
+  })
+
+  test('the deep swatches show only while a colour is chosen, and colour starts at the first', async ($, on) => {
+    terminal(on)
+    const written = recordWrites(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'highlight-colour' })
+    expect((await keysOf(toolbar)).filter(key => key.startsWith('highlight-#'))).toHaveLength(9)
+    const chosen = (await toolbar.findAll({ type: 'Text' })).filter(piece => piece.text === '◆◆')
+    expect(chosen.map(piece => piece.props.backgroundColor)).toEqual(['#264f78'])
+    await toolbar.press({ key: 'highlight-tinted' })
+    expect((await keysOf(toolbar)).filter(key => key.startsWith('highlight-#'))).toEqual([])
+    await toolbar.press({ key: 'save' })
+    expect(written).toEqual([['cc-stretch.highlight', 'tinted']])
+    await toolbar.unmount()
+  })
+
+  test('the toolbar restyles replies live', async ($, on) => {
+    terminal(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-underline' })
+    await toolbar.press({ key: 'mark-bold' })
+    await toolbar.press({ key: 'highlight-colour' })
+    await toolbar.press({ key: 'highlight-#5c4a00' })
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ bold: true, backgroundColor: '#5c4a00', color: '#f2f2f2' })
+    expect(phrase).not.toHaveProperty('underline')
+    await ui.unmount()
+    await toolbar.unmount()
+  })
+
+  test('reset and save show only while a try differs from the saved style', async ($, on) => {
+    terminal(on)
+    const { toolbar } = await showToolbar($)
+    expect(await keysOf(toolbar)).not.toContain('save')
+    await toolbar.press({ key: 'mark-bold' })
+    expect(await keysOf(toolbar)).toEqual(expect.arrayContaining(['reset', 'save']))
+    await toolbar.press({ key: 'mark-bold' })
+    expect(await keysOf(toolbar)).not.toContain('reset')
+    expect(await keysOf(toolbar)).not.toContain('save')
+    await toolbar.unmount()
+  })
+
+  test('reset returns to the saved style', { options: { marks: 'dim' } }, async ($, on) => {
+    terminal(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-italic' })
+    const ui = await mountReply($, FULLSCREEN)
+    expect(await phraseProps(ui)).toMatchObject({ italic: true, dimColor: true })
+    await toolbar.press({ key: 'reset' })
+    const again = await mountReply($, FULLSCREEN, REPLY, 'terminal', 'reply-2')
+    const phrase = await phraseProps(again)
+    expect(phrase).toMatchObject({ dimColor: true })
+    expect(phrase).not.toHaveProperty('italic')
+    await again.unmount()
+    await ui.unmount()
+    await toolbar.unmount()
+  })
+
+  test('save writes the marks and the highlight when both changed, none for no marks', async ($, on) => {
+    terminal(on)
+    const written = recordWrites(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-underline' })
+    await toolbar.press({ key: 'highlight-colour' })
+    await toolbar.press({ key: 'save' })
+    expect(written).toEqual([['cc-stretch.marks', 'none'], ['cc-stretch.highlight', '#264f78']])
+    // The try is gone once saved, so nothing is left to save.
+    expect(await keysOf(toolbar)).not.toContain('save')
+    await toolbar.unmount()
+  })
+
+  test('a refused save keeps the try and says why', async ($, on) => {
+    terminal(on)
+    on('config.set', () => ({ deny: 'a managed setting owns it' }))
+    const said = toasts(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-bold' })
+    await toolbar.press({ key: 'save' })
+    expect(said).toEqual(['cc-stretch: the style was not saved: a managed setting owns it'])
+    expect(await keysOf(toolbar)).toContain('save')
+    await toolbar.unmount()
+  })
+
+  /** A settings writer that holds each write until `release`, saying when one is held. */
+  const heldWrites = (on: On) => {
+    const written: [string, unknown][] = []
+    let release: () => void = () => {}
+    const gate = new Promise<void>(resolve => (release = resolve))
+    let entered: () => void = () => {}
+    const held = new Promise<void>(resolve => (entered = resolve))
+    on('config.set', async (_, e) => {
+      entered()
+      await gate
+      written.push([e.key, e.value])
+      return { value: e.value }
+    })
+    return { written, held, release: () => release() }
+  }
+
+  test('while a save is under way the toolbar offers nothing to press, close included', async ($, on) => {
+    terminal(on)
+    const writes = heldWrites(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-bold' })
+    const saving = toolbar.press({ key: 'save' })
+    await writes.held
+    expect(await keysOf(toolbar)).toEqual([])
+    writes.release()
+    await saving
+    expect(await keysOf(toolbar)).toContain('close')
+    expect(await keysOf(toolbar)).not.toContain('save')
+    await toolbar.unmount()
+  })
+
+  test('a mark pressed together with save is saved or kept as the try, never lost', async ($, on) => {
+    terminal(on)
+    const written = recordWrites(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-bold' })
+    await Promise.all([toolbar.press({ key: 'mark-italic' }), toolbar.press({ key: 'save' })])
+    const savedItalic = written.some(([key, value]) => key === 'cc-stretch.marks' && String(value).includes('italic'))
+    expect(savedItalic || (await keysOf(toolbar)).includes('save')).toBe(true)
+    await toolbar.unmount()
+  })
+
+  test('save writes only the settings that changed, and a later refusal names what was saved', async ($, on) => {
+    terminal(on)
+    const written: [string, unknown][] = []
+    on('config.set', (_, e) => {
+      if (e.key === 'cc-stretch.highlight' && written.length > 0) return { deny: 'a managed setting owns it' }
+      written.push([e.key, e.value])
+      return { value: e.value }
+    })
+    const said = toasts(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'highlight-colour' })
+    await toolbar.press({ key: 'save' })
+    expect(written).toEqual([['cc-stretch.highlight', '#264f78']])
+    await toolbar.press({ key: 'mark-bold' })
+    // As of Claude Code 2.1.302 `claude plugin test` does not load the plugin again with the saved settings,
+    // so after the save the toolbar shows the style it loaded with, which has no highlight, and colour must
+    // be pressed again before a swatch shows.
+    await toolbar.press({ key: 'highlight-colour' })
+    await toolbar.press({ key: 'highlight-#1f3a5f' })
+    await toolbar.press({ key: 'save' })
+    expect(written).toEqual([['cc-stretch.highlight', '#264f78'], ['cc-stretch.marks', 'bold,underline']])
+    expect(said).toEqual(['cc-stretch: marks saved, highlight not saved: a managed setting owns it'])
+    await toolbar.unmount()
+  })
+
+  test('close and save pressed together never say a style was dropped that then is saved', async ($, on) => {
+    terminal(on)
+    // As of Claude Code 2.1.302, what is drawn above the prompt once the toolbar steps aside.
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
+    const written = recordWrites(on)
+    const said = toasts(on)
+    for (const order of [['close', 'save'], ['save', 'close']] as const) {
+      written.length = 0
+      said.length = 0
+      await runStyle($)
+      const toolbar = await mountToolbar($)
+      await toolbar.press({ key: 'mark-bold' })
+      await Promise.allSettled(order.map(key => toolbar.press({ key })))
+      if (said.includes('cc-stretch: the style you tried was not saved')) expect(written).toEqual([])
+      else expect(written).toEqual([['cc-stretch.marks', 'bold,underline']])
+      await toolbar.unmount()
+    }
+  })
+
+  test('a highlight saved in capitals is the chosen swatch, with nothing to reset or save', { options: { highlight: '#264F78' } }, async ($, on) => {
+    terminal(on)
+    const { toolbar } = await showToolbar($)
+    const chosen = (await toolbar.findAll({ type: 'Text' })).filter(piece => piece.text === '◆◆')
+    expect(chosen.map(piece => piece.props.backgroundColor)).toEqual(['#264f78'])
+    await toolbar.press({ key: 'highlight-#264f78' })
+    expect(await keysOf(toolbar)).not.toContain('save')
+    await toolbar.unmount()
+  })
+
+  test('close puts the toolbar away and drops a try it did not save, saying so', async ($, on) => {
+    terminal(on)
+    // As of Claude Code 2.1.302, what is drawn above the prompt once the toolbar steps aside.
+    on('ui.render', { component: 'AbovePrompt' }, () => ({ type: 'Box', props: {}, children: [] }))
+    const said = toasts(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'mark-bold' })
+    await toolbar.press({ key: 'close' })
+    expect(await keysOf(toolbar)).toEqual([])
+    expect(said).toEqual(['cc-stretch: the style you tried was not saved'])
+    const ui = await mountReply($, FULLSCREEN)
+    expect(await phraseProps(ui)).not.toHaveProperty('bold')
+    await ui.unmount()
+    await toolbar.unmount()
   })
 })

@@ -4,6 +4,9 @@ import { grow, lengthOf } from './grow'
 import { continuationOf, isMarkup, layout, link, linkAt, targetsIn, tint, widthOf } from './layout'
 import type { Action, Row, Run } from './layout'
 import { closeAfter, isLinkable, KEY_SEPARATOR, parse } from './parse'
+import { DEFAULT_LOOK, drawsHighlight, lookProps } from './look'
+import type { Hex } from './contrast'
+import type { DrawnLook } from './look'
 import type { Segment, Stretch } from './parse'
 
 // Draws one paragraph of a reply that holds stretches. It runs where the reader's screen draws it,
@@ -23,8 +26,20 @@ type Ask = { key: string; action: Action; n: number }
 /** While letters show: whether typing one opens or closes, and the letter of each stretch they cover. */
 type Letters = { action: Action; keys: Record<string, string> }
 
-/** The paragraph, the stretches the reader already has open in it, the tint of each, the last ask, and its letters. */
-export type ReplyProps = { text: string; open: string[]; tints: Record<string, Tint>; ask: Ask | null; letters: Letters | null }
+/**
+ * The paragraph, the stretches the reader already has open in it, the tint of each, the last ask, its
+ * letters, how pressable phrases look, and under the tinted highlight each stretch's own highlight, by
+ * key, in place of the look's.
+ */
+export type ReplyProps = {
+  text: string
+  open: string[]
+  tints: Record<string, Tint>
+  ask: Ask | null
+  letters: Letters | null
+  look?: DrawnLook
+  highlights: Record<string, Hex>
+}
 
 /**
  * What the instance posts to the hooks module when the open stretches change, with the stretch the
@@ -67,7 +82,8 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
     surface.every(FRAME_MS, () => tick(surface))
   }
   // As of Claude Code 2.1.302 a paragraph an older plugin version drew stays on screen after
-  // /reload-plugins, and this code is handed its old props, without the ask or the letters.
+  // /reload-plugins, and this code is handed its old props, without the ask, the letters, the look or
+  // the highlights.
   const ask = props.ask ?? null
   const letters = props.letters ?? null
   if (ask !== null) asks.set(surface, ask)
@@ -79,11 +95,17 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   const lettering = lettered(laid, letters)
   drawn.set(surface, { laid, rows: lettering, segments })
   const rows = state.selection === null ? lettering : selected(lettering, state.selection)
+  const look = props.look ?? DEFAULT_LOOK
+  const highlights = new Map(Object.entries(props.highlights ?? {}))
+  const lookFor = (run: DrawnRun): DrawnLook => {
+    const highlight = run.link && highlights.get(run.link.key)
+    return highlight === undefined ? look : { ...look, highlight }
+  }
   // In Claude Code 2.1.302 in WezTerm 20260905-195314-b99b1ca2, the cells that start the next
   // paragraph were seen taking the style this paragraph's last row ends in, a stretch's underline or a
   // letter's background, so a last row that ends styled ends in one plain cell.
   const last = rows.at(-1)?.at(-1)
-  const tail = last !== undefined && Object.keys(styleOf(last)).length > 0 ? <Text> </Text> : null
+  const tail = last !== undefined && Object.keys(styleOf(last, lookFor(last))).length > 0 ? <Text> </Text> : null
 
   return (
     <Box flexDirection="column">
@@ -92,7 +114,7 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
           {row.length === 0
             ? ' '
             : row.map(run => {
-                const piece = <Text {...styleOf(run)}>{run.text}</Text>
+                const piece = <Text {...styleOf(run, lookFor(run))}>{run.text}</Text>
                 return run.href === undefined ? piece : <Link href={run.href}>{piece}</Link>
               })}
           {i === rows.length - 1 && tail}
@@ -322,22 +344,29 @@ function closed(open: string[], key: string): string[] {
   return open.filter(k => k !== key && !k.startsWith(`${key}${KEY_SEPARATOR}`))
 }
 
-function styleOf(run: DrawnRun): TextProps {
+function styleOf(run: DrawnRun, look: DrawnLook): TextProps {
+  // A phrase a press acts on carries the look: underlined in the text's own colour by default,
+  // leaving colour to code, to the words a click added and to a hyperlink inside the phrase. A
+  // closer is tinted like those words.
+  const isPlainText = !run.tint && !run.code && run.href === undefined
+  // While a letter covers the phrase, the rest of it keeps a highlight drawn on it, so a tinted one
+  // still shows the colour the stretch opens in; any other part is drawn in inverse text on the
+  // permission colour, underlined whatever the look.
+  const isOnPermission = run.isAfterLetter && !drawsHighlight(look, isPlainText)
+  const looked = run.link && !run.isLetter && !isOnPermission ? lookProps(look, isPlainText, run.dim) : undefined
   return {
     ...(run.bold && { bold: true }),
     ...(run.italic && { italic: true }),
     ...(run.underline && { underline: true }),
-    ...(run.dim && { dimColor: true }),
+    // A pressable run's own dim, such as a link target's, is drawn by lookProps, which knows the highlight.
+    ...(run.dim && looked === undefined && { dimColor: true }),
     ...(run.tint && { color: run.tint }),
     ...(run.code && { color: 'permission' }),
-    // Underlined, in the text's own colour, marks what a press acts on, leaving colour to code and
-    // to the words a click added. A closer is tinted like them, in its stretch's unfaded colour.
-    ...(run.link && { underline: true }),
+    ...(run.link && (looked ?? { underline: true })),
     // A hyperlink is underlined in the suggestion colour, so it is not read as a stretch to press.
     ...(run.href !== undefined && { underline: true, color: 'suggestion' }),
-    // A letter is drawn bold on the theme's error colour, and the rest of its short form or « on its
-    // permission colour, both in inverse text.
-    ...(run.isAfterLetter && { color: 'inverseText', backgroundColor: 'permission' }),
+    ...(isOnPermission && { color: 'inverseText', backgroundColor: 'permission' }),
+    // A letter is drawn bold in inverse text on the theme's error colour.
     ...(run.isLetter && { color: 'inverseText', backgroundColor: 'error', bold: true }),
     // Text the reader dragged across is drawn inverse, as a terminal draws its own selection.
     ...(run.isSelected && { inverse: true }),

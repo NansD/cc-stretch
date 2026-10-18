@@ -7,7 +7,10 @@ import { contrastOn, luminanceOf } from './contrast'
 export const MARK_NAMES = ['bold', 'italic', 'underline', 'strikethrough', 'dim'] as const
 export type Mark = (typeof MARK_NAMES)[number]
 
-/** The marks a pressable phrase carries and its highlight; '' for none. */
+/** The highlight that draws each stretch in the colour its words take once open. */
+export const TINTED = 'tinted'
+
+/** The marks a pressable phrase carries and its highlight: a colour, TINTED, or '' for none. */
 export type Look = { marks: Mark[]; highlight: string }
 
 /** The default: underlined, in the text's own colour. */
@@ -15,11 +18,15 @@ export const DEFAULT_LOOK: Look = { marks: ['underline'], highlight: '' }
 
 const textOf = (value: unknown): string => (typeof value === 'string' ? value.trim() : '')
 
-/** A highlight as one spelling: a hex colour in lower case, so `#264F78` and `#264f78` are one colour. */
+/** A highlight as one spelling: TINTED or a hex colour in lower case, so `#264F78` and `#264f78` are one colour. */
 const highlightOf = (value: unknown): string => {
   const text = textOf(value)
-  return luminanceOf(text) === undefined ? text : text.toLowerCase()
+  const lower = text.toLowerCase()
+  return lower === TINTED || luminanceOf(text) !== undefined ? lower : text
 }
+
+/** Whether a highlight is one colour, for every stretch alike. */
+export const isColour = (highlight: string) => highlight !== '' && highlight !== TINTED
 
 /** The marks named in a list (commas or spaces, any case), in toolbar order, unknown names dropped. */
 export function marksOf(value: unknown): Mark[] {
@@ -30,7 +37,8 @@ export function marksOf(value: unknown): Mark[] {
 /**
  * The look the options set. `marks` left empty keeps the default underline, so a highlight alone
  * adds to it; `none` takes every mark away. A value that names no mark (a typo) keeps the default
- * too, so stretches never lose their mark by accident. A hex highlight is read in lower case.
+ * too, so stretches never lose their mark by accident. A hex highlight and `tinted` are read in
+ * lower case.
  */
 export function lookOf(options: Record<string, unknown>): Look {
   const named = textOf(options.marks)
@@ -58,12 +66,13 @@ export function isSameLook(a: Look, b: Look): boolean {
 
 /**
  * The text props a look gives a pressable phrase, whose run may be dim of its own (a link target).
- * The look's dim and highlight leave a tinted closer, code and a hyperlink inside the phrase alone. On
- * a highlight the text turns dark or light so it reads, and dim moves that colour toward the highlight.
+ * The look's dim and highlight leave a coloured closer, code and a hyperlink inside the phrase alone.
+ * On a highlight the text turns dark or light so it reads, and dim moves that colour toward the
+ * highlight. A TINTED look is resolved to each stretch's own colour before it reaches here.
  */
 export function lookProps(look: Look, isPlainText: boolean, isDim = false) {
   const has = (mark: Mark) => look.marks.includes(mark)
-  const isHighlighted = look.highlight !== '' && isPlainText
+  const isHighlighted = isColour(look.highlight) && isPlainText
   const isDimmed = isDim || (has('dim') && isPlainText)
   const onHighlight: { color?: string } = isHighlighted ? contrastOn(look.highlight, isDimmed) : {}
   return {

@@ -1255,7 +1255,7 @@ describe('tool calls', () => {
 })
 
 /** The props of the first pressable phrase of the first paragraph. */
-const phraseProps = async (ui: Mounted) => (await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === 'on a stale cache')?.props
+const phraseProps = async (ui: Mounted, phrase = 'on a stale cache', key = FIRST) => (await ui.findAll({ type: 'Text', in: key })).find(piece => piece.text === phrase)?.props
 
 describe('style', () => {
   test('with no options, a pressable phrase is underlined and nothing else', async $ => {
@@ -1337,10 +1337,46 @@ describe('style', () => {
     })
   }
 
+  describe('the tinted highlight', () => {
+    // The dark theme's colours for a closed stretch's highlight, and for the words it adds once open, by place.
+    const DEEP = ['#594402', '#3d2f59', '#193531', '#4b2a1e']
+    const SOFT = ['#ffdd77', '#d3bdff', '#9ac5c0', '#e9b4a3']
+    const backgroundOf = async (ui: Mounted, phrase: string, key = FIRST) => (await phraseProps(ui, phrase, key))?.backgroundColor
+
+    test('highlights each closed stretch in the colour of its place, counted across the reply', { options: { highlight: ' Tinted ' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, 'A {{one|one more}} and {{two|two more}}.\n\nThen {{three|three more}}.')
+      expect(await backgroundOf(ui, 'one')).toBe(DEEP[0])
+      expect(await backgroundOf(ui, 'two')).toBe(DEEP[1])
+      expect(await backgroundOf(ui, 'three', 'paragraph-1')).toBe(DEEP[2])
+      expect(await phraseProps(ui, 'one')).toMatchObject({ underline: true, color: '#f2f2f2' })
+      await ui.unmount()
+    })
+
+    test('an opened stretch takes the colour of its place, not of the order it was opened in', { options: { highlight: 'tinted' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, 'A {{one|one more}} and {{two|two more}}.')
+      await pressOn(ui, 'two')
+      await ui.advance(2000)
+      const added = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => piece.text.trim() === 'more')
+      expect(added.map(piece => piece.props.color)).toEqual([SOFT[1]])
+      expect(await backgroundOf(ui, 'one')).toBe(DEEP[0])
+      await ui.unmount()
+    })
+
+    test('a nested stretch never takes the colour of the stretch holding it', { options: { highlight: 'tinted' } }, async $ => {
+      const ui = await mountReply($, FULLSCREEN, '{{p|p {{a|a1}} {{b|b1}} {{c|c1}} {{d|d1}}}} end.')
+      await pressOn(ui, 'p')
+      await ui.advance(2000)
+      expect(await backgroundOf(ui, 'c')).toBe(DEEP[3])
+      expect(await backgroundOf(ui, 'd')).toBe(DEEP[1])
+      await ui.unmount()
+    })
+  })
+
   test('lookOf reads marks in any case, with commas or spaces, in toolbar order', () => {
     expect(lookOf({ marks: 'Underline , BOLD' }).marks).toEqual(['bold', 'underline'])
     expect(lookOf({ marks: 'italic bold' }).marks).toEqual(['bold', 'italic'])
     expect(lookOf({ marks: ' NONE ', highlight: '#264f78' })).toEqual({ marks: [], highlight: '#264f78' })
+    expect(lookOf({ highlight: ' TINTED ' }).highlight).toBe('tinted')
     for (const typo of ['undrline', 'inverse', 42, ' ']) expect(lookOf({ marks: typo })).toEqual(DEFAULT_LOOK)
   })
 
@@ -1446,13 +1482,28 @@ describe('the style toolbar', () => {
     await toolbar.unmount()
   })
 
-  test('the toolbar offers five marks and deep highlights, and no text colour', async ($, on) => {
+  test('the toolbar offers five marks and three kinds of highlight, and no text colour', async ($, on) => {
     terminal(on)
     const { toolbar } = await showToolbar($)
     const keys = await keysOf(toolbar)
     expect(keys.filter(key => key.startsWith('mark-'))).toEqual(['mark-bold', 'mark-italic', 'mark-underline', 'mark-strikethrough', 'mark-dim'])
-    expect(keys.filter(key => key.startsWith('highlight-#'))).toHaveLength(9)
+    expect(keys.filter(key => key.startsWith('highlight-'))).toEqual(['highlight-none', 'highlight-colour', 'highlight-tinted'])
     expect(keys.some(key => key.startsWith('text-'))).toBe(false)
+    await toolbar.unmount()
+  })
+
+  test('the deep swatches show only while a colour is chosen, and colour starts at the first', async ($, on) => {
+    terminal(on)
+    const written = recordWrites(on)
+    const { toolbar } = await showToolbar($)
+    await toolbar.press({ key: 'highlight-colour' })
+    expect((await keysOf(toolbar)).filter(key => key.startsWith('highlight-#'))).toHaveLength(9)
+    const chosen = (await toolbar.findAll({ type: 'Text' })).filter(piece => piece.text === '◆◆')
+    expect(chosen.map(piece => piece.props.backgroundColor)).toEqual(['#264f78'])
+    await toolbar.press({ key: 'highlight-tinted' })
+    expect((await keysOf(toolbar)).filter(key => key.startsWith('highlight-#'))).toEqual([])
+    await toolbar.press({ key: 'save' })
+    expect(written).toEqual([['cc-stretch.highlight', 'tinted']])
     await toolbar.unmount()
   })
 
@@ -1461,6 +1512,7 @@ describe('the style toolbar', () => {
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-underline' })
     await toolbar.press({ key: 'mark-bold' })
+    await toolbar.press({ key: 'highlight-colour' })
     await toolbar.press({ key: 'highlight-#5c4a00' })
     const ui = await mountReply($, FULLSCREEN)
     const phrase = await phraseProps(ui)
@@ -1503,7 +1555,7 @@ describe('the style toolbar', () => {
     const written = recordWrites(on)
     const { toolbar } = await showToolbar($)
     await toolbar.press({ key: 'mark-underline' })
-    await toolbar.press({ key: 'highlight-#264f78' })
+    await toolbar.press({ key: 'highlight-colour' })
     await toolbar.press({ key: 'save' })
     expect(written).toEqual([['cc-stretch.marks', 'none'], ['cc-stretch.highlight', '#264f78']])
     // The try is gone once saved; what shows is the style the settings now hold.
@@ -1575,10 +1627,12 @@ describe('the style toolbar', () => {
     })
     const said = toasts(on)
     const { toolbar } = await showToolbar($)
-    await toolbar.press({ key: 'highlight-#264f78' })
+    await toolbar.press({ key: 'highlight-colour' })
     await toolbar.press({ key: 'save' })
     expect(written).toEqual([['cc-stretch.highlight', '#264f78']])
     await toolbar.press({ key: 'mark-bold' })
+    // As of Claude Code 2.1.302 `claude plugin test` does not load the plugin again with the saved settings, so the try starts from none.
+    await toolbar.press({ key: 'highlight-colour' })
     await toolbar.press({ key: 'highlight-#1f3a5f' })
     await toolbar.press({ key: 'save' })
     expect(written).toEqual([['cc-stretch.highlight', '#264f78'], ['cc-stretch.marks', 'bold,underline']])

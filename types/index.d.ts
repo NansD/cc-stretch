@@ -8,8 +8,9 @@ declare module 'claude-code' {
       /** Per group of tool calls: whether the reader opened it. */
       groups: StateFamily<boolean>
       /**
-       * Per reply: the count each open stretch was opened at, which picks its colour, keyed
-       * `<paragraph>#<stretch key>`, and the count the next one opened takes.
+       * Per reply: the count each open stretch was opened at, which picks the newest and, outside the
+       * tinted highlight, its colour, keyed `<paragraph>#<stretch key>`, and the count the next one
+       * opened takes.
        */
       order: StateFamily<{ order: Record<string, number>; count: number }>
       /** The request id of the reply in which a stretch was opened last, until the next prompt; empty for none. */
@@ -25,7 +26,7 @@ declare module 'claude-code' {
        * and stretch key; null while none show.
        */
       lettering: { action: 'open' | 'close'; targets: { letter: string; member: string; key: string }[] } | null
-      /** The style the toolbar is trying (marks, highlight), drawn in place of the saved one until saved; null for none. */
+      /** The style the toolbar is trying (marks, highlight: a colour, `tinted` or empty), drawn in place of the saved one until saved; null for none. */
       look: { marks: string[]; highlight: string } | null
       /** Whether /cc-stretch:style has the toolbar open. */
       toolbar: boolean

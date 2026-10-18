@@ -25,8 +25,20 @@ type Ask = { key: string; action: Action; n: number }
 /** While letters show: whether typing one opens or closes, and the letter of each stretch they cover. */
 type Letters = { action: Action; keys: Record<string, string> }
 
-/** The paragraph, the stretches the reader already has open in it, the tint of each, the last ask, its letters, and how pressable phrases look. */
-export type ReplyProps = { text: string; open: string[]; tints: Record<string, Tint>; ask: Ask | null; letters: Letters | null; look?: Look }
+/**
+ * The paragraph, the stretches the reader already has open in it, the tint of each, the last ask, its
+ * letters, how pressable phrases look, and in the tinted style each stretch's own highlight, by key,
+ * in place of the look's.
+ */
+export type ReplyProps = {
+  text: string
+  open: string[]
+  tints: Record<string, Tint>
+  ask: Ask | null
+  letters: Letters | null
+  look?: Look
+  highlights?: Record<string, string>
+}
 
 /**
  * What the instance posts to the hooks module when the open stretches change, with the stretch the
@@ -81,11 +93,17 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   const lettering = lettered(laid, letters)
   drawn.set(surface, { laid, rows: lettering, segments })
   const rows = state.selection === null ? lettering : selected(lettering, state.selection)
+  const look = props.look ?? DEFAULT_LOOK
+  const highlights = new Map(Object.entries(props.highlights ?? {}))
+  const lookFor = (run: DrawnRun): Look => {
+    const highlight = run.link && highlights.get(run.link.key)
+    return highlight === undefined ? look : { ...look, highlight }
+  }
   // In Claude Code 2.1.302 in WezTerm 20260905-195314-b99b1ca2, the cells that start the next
   // paragraph were seen taking the style this paragraph's last row ends in, a stretch's underline or a
   // letter's background, so a last row that ends styled ends in one plain cell.
   const last = rows.at(-1)?.at(-1)
-  const tail = last !== undefined && Object.keys(styleOf(last, props.look ?? DEFAULT_LOOK)).length > 0 ? <Text> </Text> : null
+  const tail = last !== undefined && Object.keys(styleOf(last, lookFor(last))).length > 0 ? <Text> </Text> : null
 
   return (
     <Box flexDirection="column">
@@ -94,7 +112,7 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
           {row.length === 0
             ? ' '
             : row.map(run => {
-                const piece = <Text {...styleOf(run, props.look ?? DEFAULT_LOOK)}>{run.text}</Text>
+                const piece = <Text {...styleOf(run, lookFor(run))}>{run.text}</Text>
                 return run.href === undefined ? piece : <Link href={run.href}>{piece}</Link>
               })}
           {i === rows.length - 1 && tail}

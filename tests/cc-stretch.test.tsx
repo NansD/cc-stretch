@@ -65,8 +65,7 @@ const rowsOf = async (ui: Mounted, key = FIRST): Promise<string[]> => {
   const children: unknown = 'children' in tree ? tree.children : []
   return (Array.isArray(children) ? children.flat(Infinity) : [children]).map(textOf)
 }
-/** The text a Client draws, each row's trailing spaces trimmed: a styled last row ends in one plain cell. */
-const textIn = async (ui: Mounted, key = FIRST) => (await rowsOf(ui, key)).map(row => row.trimEnd()).join('\n')
+const textIn = async (ui: Mounted, key = FIRST) => (await rowsOf(ui, key)).join('\n')
 
 /** Presses `phrase` where the Client drew it, as a mouse does: down, then up. The last one when `last`. */
 const pressOn = async (ui: Mounted, phrase: string, { key = FIRST, last = false } = {}) => {
@@ -690,16 +689,6 @@ test('a click inside a stretch shrinking shut opens nothing', async ($, on) => {
   await ui.unmount()
 })
 
-test('a paragraph whose last row ends in a stretch ends in one plain cell, and one ending in text does not', async $ => {
-  const ui = await mountReply($, FULLSCREEN)
-  expect((await rowsOf(ui, 'paragraph-1')).at(-1)).toBe('The fix is one line. ')
-  const pieces = await ui.findAll({ type: 'Text', in: 'paragraph-1' })
-  expect(pieces.at(-1)?.text).toBe(' ')
-  expect(pieces.at(-1)?.props).not.toHaveProperty('underline')
-  expect((await rowsOf(ui)).at(-1)).toBe('Braces in code stay: {{a|b}}.')
-  await ui.unmount()
-})
-
 test('what the reader opened survives the reply being drawn again', async $ => {
   const first = await mountReply($, FULLSCREEN)
   await pressOn(first, 'The fix is one line.', { key: 'paragraph-1' })
@@ -721,8 +710,8 @@ test('in the terminal, a « after a rule or a code fence goes on its own line an
   await ui.advance(2000)
   const rows = await rowsOf(ui)
   expect(rows.at(-2)).toMatch(/^─+$/)
-  expect(rows.at(-1)?.trimEnd()).toBe('«')
-  expect((await rowsOf(ui, 'paragraph-1')).slice(-2).map(row => row.trimEnd())).toEqual(['  key: 1', '«'])
+  expect(rows.at(-1)).toBe('«')
+  expect((await rowsOf(ui, 'paragraph-1')).slice(-2)).toEqual(['  key: 1', '«'])
   await pressOn(ui, '«', { last: true })
   await ui.advance(2000)
   expect(await textIn(ui)).toBe('Status.')

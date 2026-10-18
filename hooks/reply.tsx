@@ -101,15 +101,10 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
     const highlight = run.link && highlights.get(run.link.key)
     return highlight === undefined ? look : { ...look, highlight }
   }
-  // In Claude Code 2.1.302 in WezTerm 20260905-195314-b99b1ca2, the cells that start the next
-  // paragraph were seen taking the style this paragraph's last row ends in, a stretch's underline or a
-  // letter's background, so a last row that ends styled ends in one plain cell.
-  const last = rows.at(-1)?.at(-1)
-  const tail = last !== undefined && Object.keys(styleOf(last, lookFor(last))).length > 0 ? <Text> </Text> : null
 
   return (
     <Box flexDirection="column">
-      {rows.map((row, i) => (
+      {rows.map(row => (
         <Text wrap="truncate">
           {row.length === 0
             ? ' '
@@ -117,7 +112,6 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
                 const piece = <Text {...styleOf(run, lookFor(run))}>{run.text}</Text>
                 return run.href === undefined ? piece : <Link href={run.href}>{piece}</Link>
               })}
-          {i === rows.length - 1 && tail}
         </Text>
       ))}
     </Box>

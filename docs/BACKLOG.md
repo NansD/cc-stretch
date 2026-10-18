@@ -130,9 +130,14 @@ switch the input method off first.
   plugin test engine), so it is Claude Code's renderer or WezTerm.
 - Failure sequence: open a list item whose paragraph is followed by another paragraph; while it
   grows, the next paragraph's first row shows the underline from column 0 for about 0.2 s.
+- It can also stay. In two runs of `film/e2e/tinted.mjs` on 0.5.0 the opened stretch's `«` ended the
+  first paragraph, and once the style toolbar closed, the second paragraph's first row was
+  underlined from column 0 in that stretch's colour for the 15 s left in the session; the check
+  failed both times. A run whose `«` was followed by a full stop passed.
 - Signal: none in the product. In a recorded take: rows whose first run starts at column 0 with
   spaces and is underlined or has a background.
-- Promote when: a user reports a stray underline, or the next release film shows it.
+- Promote when: a user reports a stray underline, the next release film shows it, or the tinted
+  check fails on it again.
 - Acceptance: recording the same reply in Terminal.app tells Claude Code from WezTerm; with the
   layer known, no styled row start in a take's growth frames.
 

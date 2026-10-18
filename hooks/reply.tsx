@@ -58,12 +58,21 @@ type DrawnRun = Run & { isLetter?: true; isAfterLetter?: true; isSelected?: true
 
 type Growth = { key: string; isOpening: boolean; progress: number; duration: number }
 type Cell = { x: number; y: number }
-/** Text the reader dragged across: from the cell the press went down on to the one under the pointer. */
-type Selection = { anchor: Cell; head: Cell; isDragging: boolean }
+/**
+ * Text the reader dragged across: from the cell the press went down on to the one under the pointer.
+ * A word picked by a double-click covers both its ends, even when they are the same cell.
+ */
+type Selection = { anchor: Cell; head: Cell; isDragging: boolean; isWord?: true }
 /** What is open, what is growing, the number of the last ask acted on, and what the reader selected. */
 type State = { open: string[]; growth: Growth | null; asked: number; selection: Selection | null }
 
 const FRAME_MS = 16
+// The most time between two presses on one cell for them to count as a double-click.
+const DOUBLE_CLICK_MS = 400
+// What a double-click takes as one word: an id such as `#12806`, `NMC-2628` or `hooks/reply.tsx` comes out whole.
+const WORD = /^[\p{L}\p{N}\p{M}_#./@-]$/u
+// What a word does not end or start on, so the full stop after an id stays out of it.
+const WORD_EDGE = /^[./@-]$/
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 // What the last call drew, per instance, so a press is matched against the rows on screen: the rows
@@ -71,6 +80,10 @@ const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const drawn = new WeakMap<object, { laid: Row[]; rows: Row[]; segments: Segment[] }>()
 // The last ask each instance was handed, acted on at its next frame rather than while drawing.
 const asks = new WeakMap<object, Ask>()
+// The last click each instance saw, a press released where it went down, so a press on the same
+// cell soon after reads as a double-click. A drag's press is no click: two quick drags from one cell
+// stay two drags.
+const clicks = new WeakMap<object, Cell & { at: number }>()
 
 const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   const { Box, Link, Text } = surface.elements
@@ -182,6 +195,17 @@ function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
     const target = linkAt(shown.rows, event.x, event.y)
     if (target !== undefined && openOrClose(surface, target.action, target.key)) return
     const cell = clamped(shown.rows, event)
+    const last = clicks.get(surface)
+    clicks.delete(surface)
+    const isDouble = last !== undefined && last.x === cell.x && last.y === cell.y && Date.now() - last.at <= DOUBLE_CLICK_MS
+    const word = isDouble ? wordAt(shown.laid, cell) : undefined
+    if (word !== undefined) {
+      const picked: Selection = { ...word, isDragging: false, isWord: true }
+      surface.setState({ ...state, selection: picked })
+      const text = textIn(shown.laid, picked)
+      if (text !== '') surface.post({ copy: text } satisfies CopyPost)
+      return
+    }
     surface.setState({ ...state, selection: { anchor: cell, head: cell, isDragging: true } })
     return
   }
@@ -199,6 +223,9 @@ function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
   }
   if (event.type !== 'up') return
   const text = textIn(shown.laid, selection)
+  if (text === '' && selection.anchor.x === selection.head.x && selection.anchor.y === selection.head.y) {
+    clicks.set(surface, { ...selection.anchor, at: Date.now() })
+  }
   // A click (a press that moved nowhere) takes a selection down, and so does a release off the
   // paragraph, which as of Claude Code 2.1.302 no leave follows.
   const isOff = event.x < 0 || event.y < 0 || event.x >= surface.columns || event.y >= shown.rows.length
@@ -214,10 +241,36 @@ function clamped(rows: Row[], { x, y }: Cell): Cell {
 }
 
 /** The selection's first and last cells in reading order, both selected; none when it covers no cell. */
-function span({ anchor, head }: Selection): { from: Cell; to: Cell } | undefined {
-  if (anchor.x === head.x && anchor.y === head.y) return undefined
+function span({ anchor, head, isWord }: Selection): { from: Cell; to: Cell } | undefined {
+  if (anchor.x === head.x && anchor.y === head.y && isWord !== true) return undefined
   const isForward = anchor.y < head.y || (anchor.y === head.y && anchor.x < head.x)
   return isForward ? { from: anchor, to: head } : { from: head, to: anchor }
+}
+
+/**
+ * The word around cell `at` as a selection's two ends, its first and last cells; none when the cell
+ * holds no word character, so a double-click on a space or a comma picks nothing.
+ */
+function wordAt(rows: Row[], at: Cell): { anchor: Cell; head: Cell } | undefined {
+  const cells: { segment: string; x: number; width: number }[] = []
+  let x = 0
+  for (const run of rows[at.y] ?? []) {
+    for (const { segment } of GRAPHEMES.segment(run.text)) {
+      cells.push({ segment, x, width: widthOf(segment) })
+      x += widthOf(segment)
+    }
+  }
+  const hit = cells.findIndex(cell => at.x >= cell.x && at.x < cell.x + Math.max(1, cell.width))
+  if (hit === -1 || !WORD.test(cells[hit].segment)) return undefined
+  let first = hit
+  let last = hit
+  while (first > 0 && WORD.test(cells[first - 1].segment)) first -= 1
+  while (last < cells.length - 1 && WORD.test(cells[last + 1].segment)) last += 1
+  while (first < last && WORD_EDGE.test(cells[first].segment)) first += 1
+  while (last > first && WORD_EDGE.test(cells[last].segment)) last -= 1
+  if (WORD_EDGE.test(cells[first].segment)) return undefined
+  const end = cells[last]
+  return { anchor: { x: cells[first].x, y: at.y }, head: { x: end.x + Math.max(1, end.width) - 1, y: at.y } }
 }
 
 /** The columns of row `y` a selection covers, from the first to the last, both included. */

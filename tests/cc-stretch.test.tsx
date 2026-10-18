@@ -636,6 +636,57 @@ describe('selecting text', () => {
     await ui.unmount()
   })
 
+  /** Presses and releases the left button twice on one cell, as a double-click does. */
+  const doubleClick = async (ui: Mounted, at: { x: number; y: number }, key = FIRST) => {
+    for (let i = 0; i < 2; i += 1) {
+      await ui.pointer({ type: 'down', ...at, button: 'left', in: key })
+      await ui.pointer({ type: 'up', ...at, button: 'left', in: key })
+    }
+  }
+
+  test('a double-click copies the word under it, drawn inverse', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await doubleClick(ui, { x: 6, y: 0 })
+    expect(copies).toEqual(['build'])
+    const pieces = await ui.findAll({ type: 'Text', in: FIRST })
+    expect(pieces.find(piece => piece.text === 'build')?.props).toMatchObject({ inverse: true })
+    expect(await textIn(ui)).toBe('The build fails on a stale cache.\nBraces in code stay: {{a|b}}.')
+    await ui.unmount()
+  })
+
+  test('a double-click takes an id whole, without the punctuation after it', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN, 'See #12806, NMC-2628 and hooks/reply.tsx. Then {{a stretch|a long stretch}}.')
+    const row = (await rowsOf(ui))[0]
+    for (const id of ['#12806', 'NMC-2628', 'hooks/reply.tsx']) await doubleClick(ui, { x: row.indexOf(id) + 2, y: 0 })
+    expect(copies).toEqual(['#12806', 'NMC-2628', 'hooks/reply.tsx'])
+    await ui.unmount()
+  })
+
+  test('a double-click on a space picks nothing, and two clicks on different cells are two clicks', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await doubleClick(ui, { x: 3, y: 0 })
+    await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
+    await drag(ui, { x: 6, y: 0 }, { x: 6, y: 0 })
+    expect(copies).toEqual([])
+    expect((await ui.findAll({ type: 'Text', in: FIRST })).some(piece => piece.props.inverse === true)).toBe(false)
+    await ui.unmount()
+  })
+
+  test('a click on a short form still opens its stretch and copies nothing', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    const row = (await rowsOf(ui))[0]
+    await ui.pointer({ type: 'down', x: row.indexOf('on a stale cache') + 1, y: 0, button: 'left', in: FIRST })
+    await ui.pointer({ type: 'up', x: row.indexOf('on a stale cache') + 1, y: 0, button: 'left', in: FIRST })
+    await ui.advance(2000)
+    expect(await textIn(ui)).toContain('because the cache key hashes only package.json')
+    expect(copies).toEqual([])
+    await ui.unmount()
+  })
+
   test('a drag released off the paragraph, past any edge, still copies and leaves no highlight behind', async ($, on) => {
     const copies = clipboard(on)
     const ui = await mountReply($, FULLSCREEN)

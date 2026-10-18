@@ -7,7 +7,7 @@
     "marks": {
       "type": "string",
       "title": "Closed stretch marks",
-      "description": "Marks on a phrase you can open, as a list of bold, italic, underline, strikethrough, dim. Empty keeps the underline; none takes every mark away. Under a highlight, dim is not drawn.",
+      "description": "Marks on a phrase you can open, as a list of bold, italic, underline, strikethrough, dim. Empty keeps the underline; none takes every mark away. Under a highlight, dim moves the text toward the highlight.",
       "default": ""
     },
     "highlight": {

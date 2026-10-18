@@ -329,13 +329,13 @@ function styleOf(run: DrawnRun, look: Look): TextProps {
   // leaving colour to code, to the words a click added and to a hyperlink inside the phrase. A
   // closer is tinted like those words. While a letter covers the phrase it stays underlined, whatever
   // the look, and the letter's own colours stand alone.
-  const looked = run.link && !run.isLetter && !run.isAfterLetter ? lookProps(look, !run.tint && !run.code && run.href === undefined) : undefined
+  const looked = run.link && !run.isLetter && !run.isAfterLetter ? lookProps(look, !run.tint && !run.code && run.href === undefined, run.dim) : undefined
   return {
     ...(run.bold && { bold: true }),
     ...(run.italic && { italic: true }),
     ...(run.underline && { underline: true }),
-    // A highlight wins over a run's own dim too, such as a link target's: see lookProps.
-    ...(run.dim && looked?.backgroundColor === undefined && { dimColor: true }),
+    // A pressable run's own dim, such as a link target's, is drawn by lookProps, which knows the highlight.
+    ...(run.dim && looked === undefined && { dimColor: true }),
     ...(run.tint && { color: run.tint }),
     ...(run.code && { color: 'permission' }),
     ...(run.link && (looked ?? { underline: true })),

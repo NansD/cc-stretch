@@ -57,21 +57,23 @@ export function isSameLook(a: Look, b: Look): boolean {
 }
 
 /**
- * The text props a look gives a pressable phrase. Dim and the highlight leave a tinted closer, code
- * and a hyperlink inside the phrase alone. On a highlight the text turns dark or light so it reads,
- * and dim is not drawn there.
+ * The text props a look gives a pressable phrase, whose run may be dim of its own (a link target).
+ * The look's dim and highlight leave a tinted closer, code and a hyperlink inside the phrase alone. On
+ * a highlight the text turns dark or light so it reads, and dim moves that colour toward the highlight.
  */
-export function lookProps(look: Look, isPlainText: boolean) {
+export function lookProps(look: Look, isPlainText: boolean, isDim = false) {
   const has = (mark: Mark) => look.marks.includes(mark)
-  const isHighlighted = look.highlight !== ''
+  const isHighlighted = look.highlight !== '' && isPlainText
+  const isDimmed = isDim || (has('dim') && isPlainText)
+  const onHighlight: { color?: string } = isHighlighted ? contrastOn(look.highlight, isDimmed) : {}
   return {
     ...(has('bold') && { bold: true }),
     ...(has('italic') && { italic: true }),
     ...(has('underline') && { underline: true }),
     ...(has('strikethrough') && { strikethrough: true }),
-    // A highlight wins over dim: as of Claude Code 2.1.302 dim draws the text in the theme's grey in
-    // place of the colour chosen to read on the highlight.
-    ...(has('dim') && isPlainText && !isHighlighted && { dimColor: true }),
-    ...(isHighlighted && isPlainText && { backgroundColor: look.highlight, ...contrastOn(look.highlight) }),
+    ...(isHighlighted && { backgroundColor: look.highlight, ...onHighlight }),
+    // As of Claude Code 2.1.302 dimColor draws the theme's grey whatever the colour, so a colour chosen
+    // to read on the highlight is dimmed by contrastOn instead.
+    ...(isDimmed && onHighlight.color === undefined && { dimColor: true }),
   }
 }

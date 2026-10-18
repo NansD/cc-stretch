@@ -6,7 +6,7 @@ import { closeAfter, codeSpan, hideLongForms, isLinkable, isOpenable, KEY_SEPARA
 import type { Segment, StreamState, Stretch } from './parse'
 import { targetsIn } from './layout'
 import type { Action } from './layout'
-import { contrastOn } from './contrast'
+import { contrastOn, hex } from './contrast'
 import { isSameLook, lookOf, MARK_NAMES, marksSetting, storedLook } from './look'
 import type { Look, Mark } from './look'
 import type { ReplyPost, ReplyProps, Tint } from './reply'
@@ -45,7 +45,6 @@ const BASE = {
   light: [[150, 108, 30], [135, 0, 255], [0, 102, 102], [215, 119, 87]],
 }
 const mix = (rgb: number[], toward: number, share: number) => rgb.map(v => Math.round(v + (toward - v) * share))
-const hex = (rgb: number[]) => `#${rgb.map(v => v.toString(16).padStart(2, '0')).join('')}`
 const paletteOf = (base: number[][], text: number, background: number) =>
   base.map(rgb => mix(rgb, text, 0.45)).map(soft => ({ soft: hex(soft), faded: hex(mix(soft, background, 0.35)) }))
 const PALETTES = { dark: paletteOf(BASE.dark, 255, 0), light: paletteOf(BASE.light, 0, 255) }

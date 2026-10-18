@@ -1278,7 +1278,7 @@ describe('style', () => {
     await ui.unmount()
   })
 
-  test('marks other than dim combine with a highlight', { options: { marks: 'italic,strikethrough', highlight: '#264f78' } }, async $ => {
+  test('italic and strikethrough combine with a highlight',{ options: { marks: 'italic,strikethrough', highlight: '#264f78' } }, async $ => {
     const ui = await mountReply($, FULLSCREEN)
     const phrase = await phraseProps(ui)
     expect(phrase).toMatchObject({ italic: true, strikethrough: true, backgroundColor: '#264f78' })
@@ -1294,11 +1294,19 @@ describe('style', () => {
     await ui.unmount()
   })
 
-  test('a highlight wins over dim, so the text keeps the colour chosen to read on it', { options: { marks: 'dim', highlight: '#264f78' } }, async $ => {
+  test('dim on a highlight moves the text colour chosen to read on it toward the highlight', { options: { marks: 'dim', highlight: '#264f78' } }, async $ => {
     const ui = await mountReply($, FULLSCREEN)
     const phrase = await phraseProps(ui)
-    expect(phrase).toMatchObject({ backgroundColor: '#264f78', color: '#f2f2f2' })
+    expect(phrase).toMatchObject({ backgroundColor: '#264f78', color: '#a0b1c1' })
     expect(phrase).not.toHaveProperty('dimColor')
+    await ui.unmount()
+  })
+
+  test('dim on a highlight named by theme colour, with no text colour chosen for it, is the theme grey', { options: { marks: 'dim', highlight: 'suggestion' } }, async $ => {
+    const ui = await mountReply($, FULLSCREEN)
+    const phrase = await phraseProps(ui)
+    expect(phrase).toMatchObject({ backgroundColor: 'suggestion', dimColor: true })
+    expect(phrase).not.toHaveProperty('color')
     await ui.unmount()
   })
 
@@ -1315,14 +1323,14 @@ describe('style', () => {
   })
 
   for (const highlight of ['#264f78', '']) {
-    const name = highlight === '' ? 'stays dim with no highlight' : 'takes the highlight and its text colour, not dim'
+    const name = highlight === '' ? 'stays dim with no highlight' : 'takes the highlight, its text colour moved toward it as dim'
     test(`the target written after a relative link in a short form ${name}`, { options: { highlight } }, async $ => {
       const ui = await mountReply($, FULLSCREEN, 'Read {{the [guide](docs/guide.md)|the [guide](docs/guide.md) first}} now.')
       const target = (await ui.findAll({ type: 'Text', in: FIRST })).find(piece => piece.text === ' (docs/guide.md)')?.props
       if (highlight === '') {
         expect(target).toMatchObject({ dimColor: true })
       } else {
-        expect(target).toMatchObject({ backgroundColor: highlight, color: '#f2f2f2' })
+        expect(target).toMatchObject({ backgroundColor: highlight, color: '#a0b1c1' })
         expect(target).not.toHaveProperty('dimColor')
       }
       await ui.unmount()
@@ -1352,7 +1360,9 @@ describe('style', () => {
     await ui.unmount()
   })
 
-  test('contrastOn picks the stronger of dark and light text, and leaves non-hex colours alone', () => {
+  test('contrastOn picks the stronger of dark and light text, moves it 40% toward the highlight under dim, and leaves non-hex colours alone', () => {
+    expect(contrastOn('#264f78', true)).toEqual({ color: '#a0b1c1' })
+    expect(contrastOn('#ffd75f', true)).toEqual({ color: '#776737' })
     expect(contrastOn('#ffd75f')).toEqual({ color: '#1c1c1c' })
     expect(contrastOn('#264f78')).toEqual({ color: '#f2f2f2' })
     expect(contrastOn('#fff')).toEqual({ color: '#1c1c1c' })

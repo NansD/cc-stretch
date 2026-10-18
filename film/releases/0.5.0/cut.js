@@ -1,6 +1,6 @@
 // The 0.5.0 film, scene by scene, timed from the take's marks: the style toolbar, its marks, a
-// highlight, tinted, save and close, between title and end cards where Clawd hops, lands, and is
-// stretched like the stretches it stands for. compose.mjs --release=0.5.0 loads it into release.html.
+// highlight, tinted, save and close, between title and end cards where a click stretches Clawd.
+// compose.mjs --release=0.5.0 loads it into release.html.
 (() => {
 	const COPY = {
 		kicker: 'What’s new in',
@@ -21,36 +21,44 @@
 		install: '/plugin install cc-stretch --marketplace pro-vi/cc-stretch',
 		then: 'then /cc-stretch:style',
 		repo: 'github.com/pro-vi/cc-stretch',
+		thanks: 'Thanks to @gitsacha, whose pull request started this.',
 	};
 	// The colours the tinted highlight is made from, at full strength: Claude Code 2.1.300's warning,
 	// autoAccept, planMode and claude, as BASE in hooks/register.tsx holds them.
 	const TINTS = ['#ffc107', '#af87ff', '#48968c', '#d77757'];
-	const PX = 16;
+	// Clawd's size, a sprite pixel to PX screen pixels, and where the cards stand it across the frame.
+	const PX = 16, CX = W / 2;
 
 	/** Clawd standing with its feet on `ground`, centred on `cx`, lifted, squashed or stretched. */
 	const clawd = (cx, ground, { lift = 0, sx = 1, sy = 1, pose = 'idle', colour } = {}) =>
 		clawdSvg({ pose, colour, px: PX, x: cx - 7 * PX, y: ground - 8 * PX - lift, sx, sy });
 	const blink = (t) => (t % 2.7 > 2.55 ? 'blink' : 'idle');
+	/**
+	 * A pull on Clawd that a click starts at `from`, stretching it to (sx, sy) in 0.35 s, as a click opens
+	 * a stretch; a second click 1.2 s after the first lets it go.
+	 */
+	const clickPull = (from, sx, sy) => ({ from, full: from + 0.35, go: from + 1.2, sx, sy });
+	/** A card's two clicks on a Clawd standing at (CX, `ground`), and the boing as the second lets it go. */
+	const cues = (ground, pull) => ({ clicks: [pull.from, pull.go].map((at) => ({ at, x: CX, y: ground - 4 * PX })), boings: [pull.go] });
 	/** A card's frame, and one line of it placed `top` pixels down, centred across the frame. */
 	const stage = (...parts) => `<div style="position:relative;width:${W}px;height:${H}px">${parts.join('')}</div>`;
 	const line = (cls, top, html, style = '') => `<div class="${cls}" style="position:absolute;top:${top}px;left:0;width:100%;${style}">${html}</div>`;
 
-	// The title: Clawd drops onto the stage and squashes, hops twice, is pulled wide like a stretch
-	// opening, and is let go, ringing back to its shape as the title settles under it.
-	const FALL = 0.55, HOPS = 0.9, HOP = 0.55;
-	const TITLE_PULL = { from: 2.05, full: 2.75, go: 2.85, sx: 3.1, sy: 0.66, freq: 2.3, damping: 3.6 };
+	// The title: Clawd drops onto the stage and squashes as it lands. A click stretches it wide and the
+	// title opens out under it; a second click lets it go.
+	const FALL = 0.55, TITLE_GROUND = 590;
+	const TITLE_PULL = clickPull(1.7, 1.7, 0.82);
 	function titleCard(t) {
 		let body;
 		if (t < FALL) body = { lift: 620 * (1 - (t / FALL) ** 2), sy: 1.25, sx: 0.85 };
-		else if (t < HOPS) body = keepArea(spring(t - FALL, 0.62, 1, 3.2, 7));
-		else if (t < TITLE_PULL.from) body = hop(t - HOPS, HOP, 90);
+		else if (t < TITLE_PULL.from) body = keepArea(spring(t - FALL, 0.62, 1, 3.2, 7));
 		else body = pulled(t, TITLE_PULL);
 		const wide = clamp((body.sx - 1) / (TITLE_PULL.sx - 1));
 		return stage(
 			line('kicker', 310, COPY.kicker, `margin:0;opacity:${ease(span(t, 0.2, 0.7))}`),
-			clawd(W / 2, 590, { ...body, pose: t > 3.6 ? blink(t) : 'idle' }),
-			line('big', 655, COPY.title, `max-width:none;opacity:${ease(span(t, TITLE_PULL.from + 0.2, TITLE_PULL.go))};letter-spacing:${(-0.015 + 0.12 * wide).toFixed(3)}em`),
-			line('small', 790, COPY.features, `margin:0;opacity:${ease(span(t, 3.4, 3.9))}`),
+			clawd(CX, TITLE_GROUND, body),
+			line('big', 655, COPY.title, `max-width:none;opacity:${ease(span(t, TITLE_PULL.from, TITLE_PULL.full + 0.3))};letter-spacing:${(-0.015 + 0.08 * wide).toFixed(3)}em`),
+			line('small', 790, COPY.features, `margin:0;opacity:${ease(span(t, TITLE_PULL.go + 0.5, TITLE_PULL.go + 1))}`),
 		);
 	}
 
@@ -59,27 +67,22 @@
 		return stage(
 			line('big', 210, COPY.tintedCard, 'max-width:none'),
 			line('small', 330, COPY.tintedCardSmall, 'margin:0'),
-			...TINTS.map((colour, i) => clawd(W / 2 + (i - 1.5) * 300, 600, { ...hop(t - 0.25 - i * 0.16, 0.62, 70), colour, pose: blink(t + i) })),
+			...TINTS.map((colour, i) => clawd(CX + (i - 1.5) * 300, 600, { ...hop(t - 0.25 - i * 0.16, 0.62, 70), colour, pose: blink(t + i) })),
 		);
 	}
 
-	// The header's own Clawd, in the first shot of the take: two hops, then pulled wide and let go, as
-	// the title's Clawd was. In the terminal's pixels, before the camera scales it.
-	const HEAD_HOP = { start: 0.2, period: 0.4 };
-	const HEAD_PULL = { from: 1.0, full: 1.5, go: 1.55, sx: 2.3, sy: 0.7, freq: 2.6, damping: 4.5 };
-	const headerClawd = (t) => (t < HEAD_PULL.from ? hop(t - HEAD_HOP.start, HEAD_HOP.period, 26, 0.35) : pulled(t, HEAD_PULL));
-
-	// The end: Clawd hops on the install line, then stretches tall and is let go.
-	const END_HOP = { start: 0.35, period: 0.56 };
-	const TALL = { from: 2.6, full: 3.15, go: 3.25, sx: 0.72, sy: 1.9, freq: 2.5, damping: 4 };
+	// The end: a click stretches Clawd tall above the install line, and a second lets it go; it blinks
+	// once it has rung back to its shape. The last line thanks the pull request's author.
+	const END_GROUND = 360;
+	const TALL = clickPull(1.5, 0.84, 1.4);
 	function endCard(t) {
-		const body = t < TALL.from ? hop(t - END_HOP.start, END_HOP.period, 80) : pulled(t, TALL);
 		return stage(
-			clawd(W / 2, 360, { ...body, pose: t > TALL.go + 0.8 ? blink(t) : 'idle' }),
+			clawd(CX, END_GROUND, { ...pulled(t, TALL), pose: t > TALL.go + 0.8 ? blink(t) : 'idle' }),
 			line('big', 430, COPY.title, 'max-width:none'),
 			line('', 585, `<div class="mono" style="margin:0">${COPY.install}</div>`, 'display:flex;justify-content:center'),
 			line('small', 680, COPY.then, 'margin:0;font-family:var(--mono)'),
 			line('small', 760, COPY.repo, 'margin:0'),
+			line('small', 860, COPY.thanks, 'margin:0'),
 		);
 	}
 
@@ -99,11 +102,11 @@
 			const TOOLBAR = [COPY.toolbar, COPY.toolbarSmall], MARKS = [COPY.marks, COPY.marksSmall], HIGHLIGHT = [COPY.highlight, COPY.highlightSmall];
 			const TINTED = [COPY.tinted, COPY.tintedSmall], SAVE = [COPY.save, COPY.saveSmall];
 			return [
-				{ kind: 'card', len: 5, html: titleCard, thuds: [FALL, ...landings(HOPS, HOP, 2)], boings: [TITLE_PULL.go] },
+				{ kind: 'card', len: 5, html: titleCard, thuds: [FALL], ...cues(TITLE_GROUND, TITLE_PULL) },
 
-				// The whole screen first, the header's Clawd hopping, then the camera pushes in as the command is typed.
-				shot(m.replied.t - 0.2, m.replied.t + 1.6, TOOLBAR, { zoom: 1, logo: headerClawd, thuds: landings(HEAD_HOP.start, HEAD_HOP.period, 2), boings: [HEAD_PULL.go] }, 0.75),
-				shot(m.replied.t + 1.6, m.shown.t + 1.0, TOOLBAR, {}, 1.15),
+				// The whole screen first, then the camera pushes in as the command is typed.
+				shot(m.replied.t - 0.2, m.replied.t + 1.0, TOOLBAR, { zoom: 1 }),
+				shot(m.replied.t + 1.0, m.shown.t + 1.0, TOOLBAR, {}, 1.15),
 
 				pressing(m.shown.t + 1.0, m.bold, MARKS),
 				pressing(after(m.bold), m.italic, MARKS),
@@ -124,7 +127,7 @@
 				pressing(after(m.save), m.close, SAVE, 1.3),
 				shot(after(m.close), after(m.close) + 1.2, SAVE),
 
-				{ kind: 'card', len: 6.5, html: endCard, thuds: landings(END_HOP.start, END_HOP.period, 4), boings: [TALL.go] },
+				{ kind: 'card', len: 5.5, html: endCard, ...cues(END_GROUND, TALL) },
 			];
 		},
 	};

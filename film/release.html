@@ -37,10 +37,8 @@
 // string or a function of the seconds into the scene, each click ({ at, x, y }) lands that many
 // seconds into it at that pixel, and each boing (a spring let go) or thud (a landing) sounds that many
 // seconds into it. A take scene is { kind: 'take', len, from, to, caption, small?, focus, zoom?,
-// growth?, click?, keys?, logo?, boings?, thuds? }: it plays take seconds `from` to `to` (a growth
-// plays each captured screen evenly first), and a click ({ row, col }) or keys (['⌥', '↓']) land as it
-// ends. Its logo, a function of the seconds into it, lifts, squashes and stretches the header's Clawd
-// ({ lift, sx, sy }), and its boings and thuds sound as a card's do.
+// growth?, click?, keys? }: it plays take seconds `from` to `to` (a growth plays each captured screen
+// evenly first), and a click ({ row, col }) or keys (['⌥', '↓']) land as it ends.
 let SCENES = null;
 function build() {
 	// A take recorded at another size than 100 × 30 says so in its marks.
@@ -76,11 +74,6 @@ function takeScene(scene, t) {
 	show('termlayer', 1);
 	const k = clamp((t - scene.a) / (scene.b - scene.a));
 	drawRows(scene.growth ? evenFrame(scene, t - scene.a) : frameAt(lerp(scene.from, scene.to, k)));
-	const logo = $('rows').querySelector('.logo');
-	// A logo shot cut after the header scrolled away would hop nothing, so it stops the render.
-	if (scene.logo && logo.childElementCount === 0) throw new Error(`no header Clawd in the take at ${scene.from}s for the logo shot`);
-	const { lift = 0, sx = 1, sy = 1 } = scene.logo?.(t - scene.a) ?? {};
-	logo.style.transform = scene.logo ? `translateY(${-lift}px) scale(${sx}, ${sy})` : '';
 	// The camera follows the rows that matter, moving from the previous take scene's framing; a cut
 	// to or from a card passes through cream.
 	const i = SCENES.indexOf(scene);

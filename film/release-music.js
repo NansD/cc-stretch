@@ -2,8 +2,8 @@
 // title, the electric piano walking the progression from the first take to the end card with a bell
 // pair on any card between, a soft tick at every click, a brown switch at every key the take pressed
 // (a chord's keys a moment apart, and a bell as a typed letter opens or closes its stretch), and on
-// the end card the tonic again with Clawd's two-note chirp. A scene, card or take, that bounces Clawd
-// adds a boing for each spring let go and a thud for each landing.
+// the end card the tonic again with Clawd's two-note chirp. A card that bounces Clawd adds a boing for
+// each spring let go and a thud for each landing.
 // window.renderMusic({ total, cards, takes, clicks, keys, boings, thuds }) resolves a 16-bit stereo WAV
 // as base64.
 window.renderMusic = ({ total, cards, takes, clicks, keys, boings = [], thuds = [] }) => window.playFilm(total, ({ bell, pad, brownSwitch, boing, thud, TONIC, walk, clickTicks, held, bellPair, chirp }) => {

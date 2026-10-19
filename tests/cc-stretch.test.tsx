@@ -77,6 +77,21 @@ const pressOn = async (ui: Mounted, phrase: string, { key = FIRST, last = false 
   await ui.pointer({ type: 'down', x, y, button: 'left', in: key })
   await ui.pointer({ type: 'up', x, y, button: 'left', in: key })
 }
+/** Drags the left button from `from` to `to` in the paragraph, as a mouse does: down, a move, up. */
+const drag = async (ui: Mounted, from: { x: number; y: number }, to: { x: number; y: number }, key = FIRST) => {
+  await ui.pointer({ type: 'down', ...from, button: 'left', in: key })
+  await ui.pointer({ type: 'move', ...to, button: 'left', in: key })
+  await ui.pointer({ type: 'up', ...to, button: 'left', in: key })
+}
+/** What reaches the clipboard. */
+const clipboard = (on: On) => {
+  const copies: string[] = []
+  on('ui.copy', (_, e) => {
+    copies.push(e.text)
+    return { value: { isCopied: true } }
+  })
+  return copies
+}
 
 describe('grow', () => {
   const NELSON = 'Stretchtext, a kind of hypertext, is basically a form of writing closely related to other prose.'
@@ -565,21 +580,6 @@ test('a press grows a stretch in place, nested ones too, and « shrinks it back'
 })
 
 describe('selecting text', () => {
-  /** Drags the left button from `from` to `to` in the paragraph, as a mouse does: down, a move, up. */
-  const drag = async (ui: Mounted, from: { x: number; y: number }, to: { x: number; y: number }, key = FIRST) => {
-    await ui.pointer({ type: 'down', ...from, button: 'left', in: key })
-    await ui.pointer({ type: 'move', ...to, button: 'left', in: key })
-    await ui.pointer({ type: 'up', ...to, button: 'left', in: key })
-  }
-  /** What reaches the clipboard. */
-  const clipboard = (on: On) => {
-    const copies: string[] = []
-    on('ui.copy', (_, e) => {
-      copies.push(e.text)
-      return { value: { isCopied: true } }
-    })
-    return copies
-  }
 
   test('a drag across a paragraph that holds a stretch copies the text it crossed, drawn inverse', async ($, on) => {
     const copies = clipboard(on)
@@ -751,14 +751,34 @@ describe('selecting text', () => {
     const copies = clipboard(on)
     const ui = await mountReply($, FULLSCREEN)
     await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
-    // As of Claude Code 2.1.303, `ui.advance` moves neither `performance.now()` nor `Date.now()`, so
-    // the test waits the time out.
+    // As of Claude Code 2.1.303, `ui.advance` does not move `performance.now()`, which the plugin reads
+    // for a press's time, so the test waits the time out.
     const until = performance.now() + 520
     while (performance.now() < until) continue
     await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
     expect(copies).toEqual([])
     await drag(ui, { x: 6, y: 0 }, { x: 6, y: 0 })
     expect(copies).toEqual(['build'])
+    await ui.unmount()
+  })
+
+  test('a third quick press after a double-click keeps the word selected', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await doubleClick(ui, { x: 6, y: 0 })
+    await drag(ui, { x: 6, y: 0 }, { x: 6, y: 0 })
+    const selected = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => piece.props.inverse === true).map(piece => piece.text)
+    expect({ copies, selected }).toEqual({ copies: ['build', 'build'], selected: ['build'] })
+    await ui.unmount()
+  })
+
+  test('a press that opens a stretch between two clicks keeps them from making a double-click', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
+    await pressOn(ui, 'on a stale cache')
+    await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
+    expect(copies).toEqual([])
     await ui.unmount()
   })
 
@@ -1148,6 +1168,23 @@ describe('keyboard', () => {
     await down(ui)
     expect(await both(ui)).toEqual(['a', 's'])
     expect(await textIn(ui)).toContain('a set in one file')
+    await ui.unmount()
+  })
+
+  test('with letters up, a drag across the rows a list item wraps onto draws selected only the cells it copies', async ($, on) => {
+    const text = '- See https://github.com/pro-vi/cc-stretch/pull/16 and {{a stretch|a long stretch}}.'
+    engine(on, [text])
+    const copies = clipboard(on)
+    const ui = await mountReply($, { columns: 30, rows: 40, isFullscreen: true }, text)
+    await down(ui)
+    const bottom = (await rowsOf(ui)).findIndex(row => row.includes('/16'))
+    await drag(ui, { x: 0, y: 0 }, { x: 4, y: bottom })
+    const drawn = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => piece.props.inverse === true).map(piece => piece.text)
+    expect({ copied: copies, drawn, letters: await letters(ui) }).toEqual({
+      copied: ['- See https://github.com/pro-vi/cc-st'],
+      drawn: ['- See', 'https://github.com/pro-vi/cc', '-st'],
+      letters: ['a'],
+    })
     await ui.unmount()
   })
 

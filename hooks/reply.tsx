@@ -64,8 +64,8 @@ type Cell = { x: number; y: number }
  */
 type Selection = { anchor: Cell; head: Cell; isDragging: boolean; isWord?: true }
 /**
- * One cell a double-click looks through for a word: what it shows, where, its link, and whether it
- * starts a row no word runs onto from the row before.
+ * One cell a double-click looks through for a word: what it shows, where, and its link. `startsApart`
+ * marks the first cell of a row that no word runs onto from the row before.
  */
 type WordCell = { segment: string; x: number; y: number; width: number; href?: string; startsApart?: true }
 /** What is open, what is growing, the number of the last ask acted on, and what the reader selected. */
@@ -87,9 +87,10 @@ const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const drawn = new WeakMap<object, { laid: Row[]; rows: Row[]; segments: Segment[] }>()
 // The last ask each instance was handed, acted on at its next frame rather than while drawing.
 const asks = new WeakMap<object, Ask>()
-// The last click each instance saw, where and when its press went down, so a press soon after and
-// close by makes a double-click. A press is kept from its down and dropped at its release unless it
-// selected nothing, so two quick drags from one cell stay two drags.
+// The last press each instance saw, where and when it went down, so a press soon after and close by
+// makes a double-click, and a third press as quick keeps the word. It is dropped when its release lands
+// on another cell, so two quick drags from one cell stay two drags, and when a stretch opens or closes,
+// as the rows then move and its cell may no longer hold the same text.
 const presses = new WeakMap<object, Cell & { at: number }>()
 
 const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
@@ -211,7 +212,6 @@ function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
       Math.abs(cell.y - last.y) <= DOUBLE_CLICK_CELLS
     const word = isDouble ? wordAt(shown.laid, cell) : undefined
     if (word !== undefined) {
-      presses.delete(surface)
       const picked: Selection = { ...word, isDragging: false, isWord: true }
       surface.setState({ ...state, selection: picked })
       const text = textIn(shown.laid, picked)
@@ -421,6 +421,7 @@ function openOrClose(surface: ClientSurface<State>, action: Action, key: string,
   } else {
     surface.setState({ open, growth: { key: stretch.key, isOpening: false, progress: 1, duration }, asked: acted, selection: null })
   }
+  presses.delete(surface)
 
   return true
 }

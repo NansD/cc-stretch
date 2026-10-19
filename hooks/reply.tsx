@@ -63,16 +63,23 @@ type Cell = { x: number; y: number }
  * A word picked by a double-click covers both its ends, even when they are the same cell.
  */
 type Selection = { anchor: Cell; head: Cell; isDragging: boolean; isWord?: true }
+/**
+ * One cell a double-click looks through for a word: what it shows, where, its link, and whether it
+ * starts a row no word runs onto from the row before.
+ */
+type WordCell = { segment: string; x: number; y: number; width: number; href?: string; startsApart?: true }
 /** What is open, what is growing, the number of the last ask acted on, and what the reader selected. */
 type State = { open: string[]; growth: Growth | null; asked: number; selection: Selection | null }
 
 const FRAME_MS = 16
-// The most time between two presses on one cell for them to count as a double-click.
-const DOUBLE_CLICK_MS = 400
-// What a double-click takes as one word: an id such as `#12806`, `NMC-2628` or `hooks/reply.tsx` comes out whole.
-const WORD = /^[\p{L}\p{N}\p{M}_#./@-]$/u
-// What a word does not end or start on, so the full stop after an id stays out of it.
-const WORD_EDGE = /^[./@-]$/
+// Two presses make a double-click when the second comes less than this long after the first and at
+// most this many cells from it, across and down: the limits of Claude Code 2.1.303's own double-click,
+// so a paragraph that holds a stretch answers like the paragraphs around it.
+const DOUBLE_CLICK_MS = 500
+const DOUBLE_CLICK_CELLS = 1
+// What a double-click takes as one word: Claude Code 2.1.303's own word characters, and `#` as well,
+// so that `#12806` comes out whole.
+const WORD = /[\p{L}\p{N}_/.\-+~\\#]/u
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 
 // What the last call drew, per instance, so a press is matched against the rows on screen: the rows
@@ -80,10 +87,10 @@ const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
 const drawn = new WeakMap<object, { laid: Row[]; rows: Row[]; segments: Segment[] }>()
 // The last ask each instance was handed, acted on at its next frame rather than while drawing.
 const asks = new WeakMap<object, Ask>()
-// The last click each instance saw, a press released where it went down, so a press on the same
-// cell soon after reads as a double-click. A drag's press is no click: two quick drags from one cell
-// stay two drags.
-const clicks = new WeakMap<object, Cell & { at: number }>()
+// The last click each instance saw, where and when its press went down, so a press soon after and
+// close by makes a double-click. A press is kept from its down and dropped at its release unless it
+// selected nothing, so two quick drags from one cell stay two drags.
+const presses = new WeakMap<object, Cell & { at: number }>()
 
 const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   const { Box, Link, Text } = surface.elements
@@ -184,7 +191,7 @@ function lettered(rows: Row[], letters: Letters | null): DrawnRun[][] {
  * A press on a short form or a « opens or closes its stretch. As of Claude Code 2.1.302 a Client
  * holds the pointer from a press until its release and the transcript selects nothing meanwhile, so a
  * drag from anywhere else selects here: the cells it crosses are highlighted, and on release their
- * text goes to the clipboard.
+ * text goes to the clipboard. A double-click selects here too, taking the word under it at once.
  */
 function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
   const state = surface.state
@@ -195,17 +202,23 @@ function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
     const target = linkAt(shown.rows, event.x, event.y)
     if (target !== undefined && openOrClose(surface, target.action, target.key)) return
     const cell = clamped(shown.rows, event)
-    const last = clicks.get(surface)
-    clicks.delete(surface)
-    const isDouble = last !== undefined && last.x === cell.x && last.y === cell.y && Date.now() - last.at <= DOUBLE_CLICK_MS
+    const at = performance.now()
+    const last = presses.get(surface)
+    const isDouble =
+      last !== undefined &&
+      at - last.at < DOUBLE_CLICK_MS &&
+      Math.abs(cell.x - last.x) <= DOUBLE_CLICK_CELLS &&
+      Math.abs(cell.y - last.y) <= DOUBLE_CLICK_CELLS
     const word = isDouble ? wordAt(shown.laid, cell) : undefined
     if (word !== undefined) {
+      presses.delete(surface)
       const picked: Selection = { ...word, isDragging: false, isWord: true }
       surface.setState({ ...state, selection: picked })
       const text = textIn(shown.laid, picked)
       if (text !== '') surface.post({ copy: text } satisfies CopyPost)
       return
     }
+    presses.set(surface, { ...cell, at })
     surface.setState({ ...state, selection: { anchor: cell, head: cell, isDragging: true } })
     return
   }
@@ -223,9 +236,7 @@ function pointer(surface: ClientSurface<State>, event: ClientPointerEvent) {
   }
   if (event.type !== 'up') return
   const text = textIn(shown.laid, selection)
-  if (text === '' && selection.anchor.x === selection.head.x && selection.anchor.y === selection.head.y) {
-    clicks.set(surface, { ...selection.anchor, at: Date.now() })
-  }
+  if (text !== '' || selection.anchor.x !== selection.head.x || selection.anchor.y !== selection.head.y) presses.delete(surface)
   // A click (a press that moved nowhere) takes a selection down, and so does a release off the
   // paragraph, which as of Claude Code 2.1.302 no leave follows.
   const isOff = event.x < 0 || event.y < 0 || event.x >= surface.columns || event.y >= shown.rows.length
@@ -248,29 +259,76 @@ function span({ anchor, head, isWord }: Selection): { from: Cell; to: Cell } | u
 }
 
 /**
- * The word around cell `at` as a selection's two ends, its first and last cells; none when the cell
+ * The bare URL or the word around cell `at` as a selection's two ends, its first and last cells,
+ * which a line wrapped inside it puts on different rows; none when the cell is in no bare URL and
  * holds no word character, so a double-click on a space or a comma picks nothing.
  */
 function wordAt(rows: Row[], at: Cell): { anchor: Cell; head: Cell } | undefined {
-  const cells: { segment: string; x: number; width: number }[] = []
-  let x = 0
-  for (const run of rows[at.y] ?? []) {
-    for (const { segment } of GRAPHEMES.segment(run.text)) {
-      cells.push({ segment, x, width: widthOf(segment) })
-      x += widthOf(segment)
+  const cells = cellsIn(rows)
+  const hit = cells.findIndex(cell => cell.y === at.y && at.x >= cell.x && at.x < cell.x + Math.max(1, cell.width))
+  const ends = urlAround(cells, hit) ?? wordAround(cells, hit)
+  const first = ends && cells[ends[0]]
+  const last = ends && cells[ends[1]]
+  if (first === undefined || last === undefined) return undefined
+  return { anchor: { x: first.x, y: first.y }, head: { x: last.x + Math.max(1, last.width) - 1, y: last.y } }
+}
+
+/**
+ * Every cell of `rows` in reading order, without the lead a wrapped line's later rows start with. A
+ * row starts apart from the one before unless a line wrapped onto it inside a word.
+ */
+function cellsIn(rows: Row[]): WordCell[] {
+  const cells: WordCell[] = []
+  rows.forEach((row, y) => {
+    const continuation = continuationOf(row)
+    let x = 0
+    for (const run of row) {
+      for (const { segment } of GRAPHEMES.segment(run.text)) {
+        const width = widthOf(segment)
+        if (x >= (continuation?.lead ?? 0)) {
+          const isApart = cells.at(-1)?.y !== y && continuation?.join !== ''
+          cells.push({ segment, x, y, width, href: run.href, ...(isApart && { startsApart: true }) })
+        }
+        x += width
+      }
     }
-  }
-  const hit = cells.findIndex(cell => at.x >= cell.x && at.x < cell.x + Math.max(1, cell.width))
-  if (hit === -1 || !WORD.test(cells[hit].segment)) return undefined
+  })
+  return cells
+}
+
+/** The first and last of the cells around `hit` that `isIn` holds for, within one line. */
+function around(cells: WordCell[], hit: number, isIn: (cell: WordCell | undefined) => boolean): [number, number] {
   let first = hit
   let last = hit
-  while (first > 0 && WORD.test(cells[first - 1].segment)) first -= 1
-  while (last < cells.length - 1 && WORD.test(cells[last + 1].segment)) last += 1
-  while (first < last && WORD_EDGE.test(cells[first].segment)) first += 1
-  while (last > first && WORD_EDGE.test(cells[last].segment)) last -= 1
-  if (WORD_EDGE.test(cells[first].segment)) return undefined
-  const end = cells[last]
-  return { anchor: { x: cells[first].x, y: at.y }, head: { x: end.x + Math.max(1, end.width) - 1, y: at.y } }
+  while (cells[first]?.startsApart !== true && isIn(cells[first - 1])) first -= 1
+  while (cells[last + 1]?.startsApart !== true && isIn(cells[last + 1])) last += 1
+  return [first, last]
+}
+
+/**
+ * The bare URL around cell `hit`, the cells drawn as a link to their own text; none elsewhere. A URL
+ * is taken whole, as Claude Code 2.1.303's own double-click takes one.
+ */
+function urlAround(cells: WordCell[], hit: number): [number, number] | undefined {
+  const href = cells[hit]?.href
+  if (href === undefined) return undefined
+  const [first, last] = around(cells, hit, cell => cell?.href === href)
+  const text = cells.slice(first, last + 1).map(cell => cell.segment).join('')
+  return text === href ? [first, last] : undefined
+}
+
+/**
+ * The run of word characters around cell `hit`, without the full stops it ends on unless it is
+ * nothing else; none when `hit` holds no word character.
+ */
+function wordAround(cells: WordCell[], hit: number): [number, number] | undefined {
+  const isWord = (cell: WordCell | undefined) => WORD.test(cell?.segment ?? '')
+  if (!isWord(cells[hit])) return undefined
+  const [first, last] = around(cells, hit, isWord)
+  const isStop = (at: number) => cells[at]?.segment === '.'
+  let end = last
+  while (end > first && isStop(end)) end -= 1
+  return [first, isStop(end) ? last : end]
 }
 
 /** The columns of row `y` a selection covers, from the first to the last, both included. */

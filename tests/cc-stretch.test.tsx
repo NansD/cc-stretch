@@ -643,6 +643,7 @@ describe('selecting text', () => {
       await ui.pointer({ type: 'up', ...at, button: 'left', in: key })
     }
   }
+  const firstRowOf = async (ui: Mounted) => (await rowsOf(ui))[0] ?? ''
 
   test('a double-click copies the word under it, drawn inverse', async ($, on) => {
     const copies = clipboard(on)
@@ -658,27 +659,96 @@ describe('selecting text', () => {
   test('a double-click takes an id whole, without the punctuation after it', async ($, on) => {
     const copies = clipboard(on)
     const ui = await mountReply($, FULLSCREEN, 'See #12806, NMC-2628 and hooks/reply.tsx. Then {{a stretch|a long stretch}}.')
-    const row = (await rowsOf(ui))[0]
+    const row = await firstRowOf(ui)
     for (const id of ['#12806', 'NMC-2628', 'hooks/reply.tsx']) await doubleClick(ui, { x: row.indexOf(id) + 2, y: 0 })
     expect(copies).toEqual(['#12806', 'NMC-2628', 'hooks/reply.tsx'])
     await ui.unmount()
   })
 
-  test('a double-click on a space picks nothing, and two clicks on different cells are two clicks', async ($, on) => {
+  test('a double-click keeps the marks a path, a dotfile or a flag starts with', async ($, on) => {
+    const copies = clipboard(on)
+    const text = 'Pass --plugin-dir to ~/.claude, then open .gitignore and /Users/me/a.ts, from .. up. Then {{a stretch|a long stretch}}.'
+    const ui = await mountReply($, FULLSCREEN, text)
+    const row = await firstRowOf(ui)
+    const words = ['--plugin-dir', '~/.claude', '.gitignore', '/Users/me/a.ts', '..']
+    for (const word of words) await doubleClick(ui, { x: row.indexOf(` ${word}`) + 2, y: 0 })
+    expect(copies).toEqual(words)
+    await ui.unmount()
+  })
+
+  test('a double-click takes a URL whole, and a word of a link label alone', async ($, on) => {
+    const copies = clipboard(on)
+    const text = 'See https://github.com/pro-vi/cc-stretch/pull/16. Then read [the docs](https://x.invalid/docs) and {{a stretch|a long stretch}}.'
+    const ui = await mountReply($, FULLSCREEN, text)
+    const row = await firstRowOf(ui)
+    await doubleClick(ui, { x: row.indexOf('github'), y: 0 })
+    await doubleClick(ui, { x: row.indexOf('docs'), y: 0 })
+    expect(copies).toEqual(['https://github.com/pro-vi/cc-stretch/pull/16', 'docs'])
+    await ui.unmount()
+  })
+
+  test('a double-click takes a URL a line wrapped inside whole, from either of its rows', async ($, on) => {
+    const copies = clipboard(on)
+    const url = 'https://github.com/pro-vi/cc-stretch/pull/16'
+    const ui = await mountReply($, { columns: 30, rows: 40, isFullscreen: true }, `See ${url} and {{a stretch|a long stretch}}.`)
+    const rows = await rowsOf(ui)
+    const top = rows.findIndex(row => row.includes('https'))
+    const bottom = rows.findIndex(row => row.includes('/16'))
+    expect(bottom).toBeGreaterThan(top)
+    await doubleClick(ui, { x: (rows[top] ?? '').indexOf('https') + 2, y: top })
+    await doubleClick(ui, { x: (rows[bottom] ?? '').indexOf('/16'), y: bottom })
+    expect(copies).toEqual([url, url])
+    await ui.unmount()
+  })
+
+  test('a double-click on the last word of a row a line wrapped at a space takes that word alone', async ($, on) => {
+    const copies = clipboard(on)
+    const text = 'Each word stays apart where a line wraps at a space between two words, {{a stretch|a long stretch}}.'
+    const ui = await mountReply($, { columns: 30, rows: 40, isFullscreen: true }, text)
+    const row = (await firstRowOf(ui)).trimEnd()
+    await doubleClick(ui, { x: row.length - 1, y: 0 })
+    expect(copies).toEqual([row.split(' ').at(-1)])
+    await ui.unmount()
+  })
+
+  test('a double-click picks a one-letter word', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN, 'Pick a word, then {{a stretch|a long stretch}}.')
+    await doubleClick(ui, { x: 'Pick '.length, y: 0 })
+    expect(copies).toEqual(['a'])
+    await ui.unmount()
+  })
+
+  test('a double-click on a space picks nothing, and two clicks more than a cell apart are two clicks', async ($, on) => {
     const copies = clipboard(on)
     const ui = await mountReply($, FULLSCREEN)
     await doubleClick(ui, { x: 3, y: 0 })
     await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
-    await drag(ui, { x: 6, y: 0 }, { x: 6, y: 0 })
+    await drag(ui, { x: 7, y: 0 }, { x: 7, y: 0 })
     expect(copies).toEqual([])
     expect((await ui.findAll({ type: 'Text', in: FIRST })).some(piece => piece.props.inverse === true)).toBe(false)
+    await ui.unmount()
+  })
+
+  test('two clicks over 500 ms apart are two clicks, and two sooner and a cell apart are a double-click', async ($, on) => {
+    const copies = clipboard(on)
+    const ui = await mountReply($, FULLSCREEN)
+    await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
+    // As of Claude Code 2.1.303, `ui.advance` moves neither `performance.now()` nor `Date.now()`, so
+    // the test waits the time out.
+    const until = performance.now() + 520
+    while (performance.now() < until) continue
+    await drag(ui, { x: 5, y: 0 }, { x: 5, y: 0 })
+    expect(copies).toEqual([])
+    await drag(ui, { x: 6, y: 0 }, { x: 6, y: 0 })
+    expect(copies).toEqual(['build'])
     await ui.unmount()
   })
 
   test('a click on a short form still opens its stretch and copies nothing', async ($, on) => {
     const copies = clipboard(on)
     const ui = await mountReply($, FULLSCREEN)
-    const row = (await rowsOf(ui))[0]
+    const row = await firstRowOf(ui)
     await ui.pointer({ type: 'down', x: row.indexOf('on a stale cache') + 1, y: 0, button: 'left', in: FIRST })
     await ui.pointer({ type: 'up', x: row.indexOf('on a stale cache') + 1, y: 0, button: 'left', in: FIRST })
     await ui.advance(2000)

@@ -114,7 +114,7 @@ const Reply: ClientModule<ReplyProps, State> = (props, surface) => {
   const laid = layout(compose(segments, state, tints), surface.columns > 0 ? surface.columns : 80)
   const lettering = lettered(laid, letters)
   drawn.set(surface, { laid, rows: lettering, segments })
-  const rows = state.selection === null ? lettering : selected(lettering, state.selection)
+  const rows = state.selection === null ? lettering : selected(lettering, laid, state.selection)
   const look = props.look ?? DEFAULT_LOOK
   const highlights = new Map(Object.entries(props.highlights ?? {}))
   const lookFor = (run: DrawnRun): DrawnLook => {
@@ -331,18 +331,26 @@ function wordAround(cells: WordCell[], hit: number): [number, number] | undefine
   return [first, isStop(end) ? last : end]
 }
 
-/** The columns of row `y` a selection covers, from the first to the last, both included. */
-function columnsOf(y: number, { from, to }: { from: Cell; to: Cell }): [number, number] | undefined {
+/**
+ * The columns of `row`, row `y`, a selection covers, from the first to the last, both included. A row
+ * a line wrapped onto is covered after its lead, as the line itself had none there.
+ */
+function columnsOf(y: number, row: Row, { from, to }: { from: Cell; to: Cell }): [number, number] | undefined {
   if (y < from.y || y > to.y) return undefined
-  return [y === from.y ? from.x : 0, y === to.y ? to.x : Number.POSITIVE_INFINITY]
+  const lead = continuationOf(row)?.lead ?? 0
+  return [Math.max(y === from.y ? from.x : 0, lead), y === to.y ? to.x : Number.POSITIVE_INFINITY]
 }
 
-/** Each run of `rows` with the part a selection covers split out and marked, character by character. */
-function selected(rows: DrawnRun[][], selection: Selection): DrawnRun[][] {
+/**
+ * Each run of `rows` with the part a selection covers split out and marked, character by character:
+ * the cells `textIn` copies. `laid` is `rows` before letters were drawn over them, which is where a
+ * wrapped row's lead is recorded.
+ */
+function selected(rows: DrawnRun[][], laid: Row[], selection: Selection): DrawnRun[][] {
   const covered = span(selection)
   if (covered === undefined) return rows
   return rows.map((row, y) => {
-    const columns = columnsOf(y, covered)
+    const columns = columnsOf(y, laid[y] ?? [], covered)
     if (columns === undefined) return row
     const [first, last] = columns
     const out: DrawnRun[] = []
@@ -373,10 +381,8 @@ function textIn(rows: Row[], selection: Selection): string {
   let text = ''
   for (let y = covered.from.y; y <= covered.to.y; y += 1) {
     const row = rows[y] ?? []
-    const [first, last] = columnsOf(y, covered) ?? [0, Number.POSITIVE_INFINITY]
+    const [start, last] = columnsOf(y, row, covered) ?? [0, Number.POSITIVE_INFINITY]
     const continuation = continuationOf(row)
-    // A row a line wrapped onto starts after its lead, as the line itself had none there.
-    const start = continuation === undefined ? first : Math.max(first, continuation.lead)
     let piece = ''
     let at = 0
     for (const run of row) {

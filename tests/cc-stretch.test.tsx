@@ -701,6 +701,23 @@ describe('selecting text', () => {
     await ui.unmount()
   })
 
+  test('a selection across the rows a list item wraps onto draws selected only the cells it copies', async ($, on) => {
+    const copies = clipboard(on)
+    const url = 'https://github.com/pro-vi/cc-stretch/pull/16'
+    const ui = await mountReply($, { columns: 30, rows: 40, isFullscreen: true }, `- See ${url} and {{a stretch|a long stretch}}.`)
+    const rows = await rowsOf(ui)
+    const bottom = rows.findIndex(row => row.includes('/16'))
+    const drawn = async () => (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => piece.props.inverse === true).map(piece => piece.text)
+    await doubleClick(ui, { x: (rows[bottom] ?? '').indexOf('/16'), y: bottom })
+    expect({ copied: copies, drawn: (await drawn()).join('') }).toEqual({ copied: [url], drawn: url })
+    await drag(ui, { x: 0, y: 0 }, { x: 4, y: bottom })
+    expect({ copied: copies.at(-1), drawn: await drawn() }).toEqual({
+      copied: '- See https://github.com/pro-vi/cc-st',
+      drawn: ['- See', 'https://github.com/pro-vi/cc', '-st'],
+    })
+    await ui.unmount()
+  })
+
   test('a double-click on the last word of a row a line wrapped at a space takes that word alone', async ($, on) => {
     const copies = clipboard(on)
     const text = 'Each word stays apart where a line wraps at a space between two words, {{a stretch|a long stretch}}.'

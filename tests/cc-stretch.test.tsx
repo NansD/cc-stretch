@@ -687,6 +687,16 @@ describe('selecting text', () => {
     await ui.unmount()
   })
 
+  test('a double-click takes a URL drawn as code, with a file scheme, or in brackets, whole and alone', async ($, on) => {
+    const copies = clipboard(on)
+    const text = 'Serve `http://localhost:5173`, open file:///Users/me/a.ts. (See https://x.invalid/a_(b)). Then {{a stretch|a long stretch}}.'
+    const ui = await mountReply($, FULLSCREEN, text)
+    const row = await firstRowOf(ui)
+    for (const at of ['localhost', 'Users', 'x.invalid']) await doubleClick(ui, { x: row.indexOf(at), y: 0 })
+    expect(copies).toEqual(['http://localhost:5173', 'file:///Users/me/a.ts', 'https://x.invalid/a_(b)'])
+    await ui.unmount()
+  })
+
   test('a double-click takes a URL a line wrapped inside whole, from either of its rows', async ($, on) => {
     const copies = clipboard(on)
     const url = 'https://github.com/pro-vi/cc-stretch/pull/16'
@@ -762,11 +772,10 @@ describe('selecting text', () => {
     await ui.unmount()
   })
 
-  test('a third quick press after a double-click keeps the word selected', async ($, on) => {
+  test('a third quick press a cell on from the second keeps the word selected', async ($, on) => {
     const copies = clipboard(on)
     const ui = await mountReply($, FULLSCREEN)
-    await doubleClick(ui, { x: 6, y: 0 })
-    await drag(ui, { x: 6, y: 0 }, { x: 6, y: 0 })
+    for (const x of [5, 6, 7]) await drag(ui, { x, y: 0 }, { x, y: 0 })
     const selected = (await ui.findAll({ type: 'Text', in: FIRST })).filter(piece => piece.props.inverse === true).map(piece => piece.text)
     expect({ copies, selected }).toEqual({ copies: ['build', 'build'], selected: ['build'] })
     await ui.unmount()

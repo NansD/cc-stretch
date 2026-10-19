@@ -68,7 +68,7 @@ into `<outDir>`, and exits 1 if a step failed; `node film/e2e/render.mjs <outDir
   2. Move the pointer into the paragraph and out of it: the highlight goes.
   3. Click a word twice, the presses less than 500 ms and at most a cell apart: the word is drawn
      inverse and on the clipboard. It is the word Claude Code 2.1.303 takes in a paragraph without
-     a stretch, except that `#` stays in it and a full stop after it does not.
+     a stretch, except that `#` stays in it and any full stops after it stay out.
 - **Writes:** the clipboard; save its text first and put it back.
 - **Gotchas:** the paragraph hears the pointer leave only after it has heard it inside, so a driver
   that only sends a motion outside never clears a highlight.

@@ -110,8 +110,8 @@ never lose your place.
   Code 2.1.302 its transcript selects nothing in it. A drag there is the plugin's: the text it
   crosses is drawn inverse and copied when the button comes up, and it stays within that paragraph.
   A double-click there selects and copies the word under it, as Claude Code 2.1.303 does in a
-  paragraph without a stretch, except that it keeps the `#` of an id such as `#12806` and leaves out
-  the full stop after a word.
+  paragraph without a stretch, except that the `#` of an id such as `#12806` stays in the word and
+  any full stops after it stay out.
 - Claude writes every level up front, so a reply costs about as many tokens as before. You read
   less; you don't pay less.
 - The `{{short|long}}` markup shows as raw text wherever the plugin isn't loaded.
